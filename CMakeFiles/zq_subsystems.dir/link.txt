@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzq_subsystems.a CMakeFiles/zq_subsystems.dir/src/subsystems/net_addr.cpp.o CMakeFiles/zq_subsystems.dir/src/subsystems/net_driver.cpp.o CMakeFiles/zq_subsystems.dir/src/subsystems/protocol.cpp.o CMakeFiles/zq_subsystems.dir/src/subsystems/reliable_channel.cpp.o CMakeFiles/zq_subsystems.dir/src/subsystems/server.cpp.o CMakeFiles/zq_subsystems.dir/src/subsystems/client.cpp.o
+/usr/bin/ranlib libzq_subsystems.a

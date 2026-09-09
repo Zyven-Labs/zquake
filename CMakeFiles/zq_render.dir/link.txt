@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzq_render.a CMakeFiles/zq_render.dir/src/render/font8x8.cpp.o CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.o
+/usr/bin/ranlib libzq_render.a

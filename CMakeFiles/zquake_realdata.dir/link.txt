@@ -1,0 +1,1 @@
+/usr/bin/c++ -g CMakeFiles/zquake_realdata.dir/tests/real_data_test.cpp.o -o zquake_realdata  libzq_engine.a libzq_filesystem.a libzq_core.a libzq_subsystems.a libzq_vulkan.a /usr/lib/x86_64-linux-gnu/libvulkan.so /usr/lib/x86_64-linux-gnu/libSDL2.so libzq_vm.a libzq_core.a 

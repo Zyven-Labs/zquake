@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzq_filesystem.a CMakeFiles/zq_filesystem.dir/src/filesystem/virtual_fs.cpp.o CMakeFiles/zq_filesystem.dir/src/filesystem/pak_archive.cpp.o CMakeFiles/zq_filesystem.dir/src/filesystem/path_util.cpp.o
+/usr/bin/ranlib libzq_filesystem.a

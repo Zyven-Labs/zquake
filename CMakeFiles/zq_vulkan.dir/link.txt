@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzq_vulkan.a CMakeFiles/zq_vulkan.dir/src/vulkan/vulkan_api.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/vulkan_pipeline.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/vulkan_image.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/vulkan_buffer.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/command_pool.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/render_command.cpp.o CMakeFiles/zq_vulkan.dir/src/vulkan/render_thread.cpp.o
+/usr/bin/ranlib libzq_vulkan.a

@@ -1,0 +1,7 @@
+# Hashes of file build rules.
+289c8b8701015a2f52caf9eb49b0b291 CMakeFiles/shaders
+d2482fbcd3f74036fc77f2581d2cca79 shaders/spv/forward_fragment.spv
+df30bd29eb8bdddb94efbfe398d55f98 shaders/spv/forward_vertex.spv
+e8b2aee0f40543cd61d8e4cd3d12e27c shaders/spv/hud_vertex.spv
+0639c05a9f4b1a65b57be432c7043936 shaders/spv/point_light.spv
+27797f4153ad1ad21caa097cefc36d52 shaders/spv/sprite_vertex.spv

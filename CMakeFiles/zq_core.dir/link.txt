@@ -1,0 +1,2 @@
+/usr/bin/ar qc libzq_core.a CMakeFiles/zq_core.dir/src/core/fixed/fixed_t.cpp.o CMakeFiles/zq_core.dir/src/core/fixed/fixed_math.cpp.o CMakeFiles/zq_core.dir/src/core/fixed/fixed_tables.cpp.o CMakeFiles/zq_core.dir/src/core/memory/allocator.cpp.o CMakeFiles/zq_core.dir/src/core/container/string.cpp.o CMakeFiles/zq_core.dir/src/core/logging/logger.cpp.o CMakeFiles/zq_core.dir/src/core/io/file_io.cpp.o
+/usr/bin/ranlib libzq_core.a
