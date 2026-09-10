@@ -487,7 +487,7 @@ int main() {
         std::vector<uint8_t> atlas(8*8*4, 200);
         std::vector<zq::render::RtTileInfo> tis; tis.push_back({0,0,8,8});
         bool ok = rt.BuildScene(worldTris, atlas, 8, 8, tis, W, H);
-        rt.UpdateEntities(ent);
+        rt.UpdateEntities(cpuScene.Triangles(), cpuScene.Nodes());
         std::vector<zq::render::RtTriangle> gTris;
         std::vector<zq::render::BvhNode> gNodes;
         ok = ok && rt.ReadbackEntity(gTris, gNodes);

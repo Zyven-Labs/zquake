@@ -44,9 +44,11 @@ public:
     std::uint32_t LightCount() const { return light_count_; }
     std::uint32_t EntityCount() const { return etri_count_; }
 
-    // Rebuilds ONLY the dynamic MDL entity BVH + triangle buffer (the static
-    // world BVH is not touched). Called when entities move/animate.
-    void UpdateEntities(const std::vector<RtTriangle>& tris);
+    // Rebuilds ONLY the dynamic MDL entity + submodel BVH + triangle buffer (the
+    // static world BVH is not touched). The BVH is built on the CPU (BuildBvh)
+    // on the game thread; this just uploads the reordered triangles + nodes and
+    // updates the entity descriptor bindings (7,8).
+    void UpdateEntities(std::vector<RtTriangle> tris, const std::vector<BvhNode>& nodes);
 
     // Copies the GPU-built entity triangle buffer (Morton-reordered) and BVH
     // nodes back to the CPU (used by the CPU-vs-GPU parity test).
@@ -113,30 +115,6 @@ private:
     VkDeviceMemory enode_mem_ = VK_NULL_HANDLE;
     std::uint32_t enode_count_ = 0;
     VkDeviceSize enode_cap_ = 0;
-
-    // GPU BVH build resources (Morton + bitonic sort + bottom-up AABBs).
-    VkBuffer ent_in_buf_ = VK_NULL_HANDLE;
-    VkDeviceMemory ent_in_mem_ = VK_NULL_HANDLE;
-    VkDeviceSize ent_in_cap_ = 0;
-    VkBuffer morton_buf_ = VK_NULL_HANDLE;
-    VkDeviceMemory morton_mem_ = VK_NULL_HANDLE;
-    VkDeviceSize morton_cap_ = 0;
-    VkBuffer order_buf_ = VK_NULL_HANDLE;
-    VkDeviceMemory order_mem_ = VK_NULL_HANDLE;
-    VkDeviceSize order_cap_ = 0;
-    VkBuffer bvh_ubo_ = VK_NULL_HANDLE;
-    VkDeviceMemory bvh_ubo_mem_ = VK_NULL_HANDLE;
-
-    VkDescriptorSetLayout bvh_set_layout_ = VK_NULL_HANDLE;
-    VkDescriptorPool bvh_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet bvh_set_ = VK_NULL_HANDLE;
-    VkPipelineLayout bvh_layout_ = VK_NULL_HANDLE;
-    VkPipeline bvh_morton_ = VK_NULL_HANDLE;
-    VkPipeline bvh_sort_ = VK_NULL_HANDLE;
-    VkPipeline bvh_build_ = VK_NULL_HANDLE;
-    VkPipeline bvh_aabb_ = VK_NULL_HANDLE;
-    VkCommandBuffer bvh_cb_ = VK_NULL_HANDLE;
-    VkFence bvh_fence_ = VK_NULL_HANDLE;
 
     VkBuffer cam_ubo_ = VK_NULL_HANDLE;
     VkDeviceMemory cam_mem_ = VK_NULL_HANDLE;

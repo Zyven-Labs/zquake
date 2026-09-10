@@ -77,7 +77,7 @@ Key Input::ScancodeToKey(int scancode) {
 void Input::HandleKeyEvent(int sdl_scancode, bool down) {
     Key key = ScancodeToKey(sdl_scancode);
     if (key != Key::NONE) {
-        if (down && !keys_[static_cast<int>(key)])
+            if (down && !keys_[static_cast<int>(key)])
             latched_[static_cast<int>(key)] = true; // capture press edge even if released same frame
         keys_[static_cast<int>(key)] = down;
     }
@@ -88,9 +88,9 @@ void Input::HandleMouseButton(int button, bool down) {
     if (button == 1) key = Key::MOUSE1;       // SDL_BUTTON_LEFT = 1
     else if (button == 3) key = Key::MOUSE2;   // SDL_BUTTON_RIGHT = 3
     else if (button == 2) key = Key::MOUSE3;   // SDL_BUTTON_MIDDLE = 2
-    
+
     if (key != Key::NONE) {
-        keys_[static_cast<int>(key)] = down;
+            keys_[static_cast<int>(key)] = down;
     }
 }
 
@@ -102,7 +102,7 @@ void Input::HandleMouseMotion(int xrel, int yrel) {
 void Input::SetKeyState(Key key, bool down) {
     int idx = static_cast<int>(key);
     if (idx >= 0 && idx < static_cast<int>(Key::KEY_COUNT)) {
-        keys_[idx] = down;
+            keys_[idx] = down;
     }
 }
 

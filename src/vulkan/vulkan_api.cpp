@@ -254,11 +254,10 @@ bool VulkanAPI::CreateSwapchain() {
     vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device_, surface_, &present_mode_count, present_modes.data());
 
     VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    // Prefer no vsync cap (IMMEDIATE), then MAILBOX, else FIFO.
     for (const auto& pm : present_modes) {
-        if (pm == VK_PRESENT_MODE_MAILBOX_KHR) {
-            present_mode = pm;
-            break;
-        }
+        if (pm == VK_PRESENT_MODE_IMMEDIATE_KHR) { present_mode = pm; break; }
+        if (pm == VK_PRESENT_MODE_MAILBOX_KHR) { present_mode = pm; }
     }
 
     VkExtent2D extent = capabilities.currentExtent;

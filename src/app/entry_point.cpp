@@ -23,6 +23,11 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <array>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 using zq::mathf::Vec3;
 using zq::mathf::Mat4;
@@ -826,24 +831,43 @@ int main(int argc, char** argv) {
         auto res = submodel_cache.emplace(mi, std::move(cache));
         return &res.first->second.ds;
     };
-    auto refresh_brush_submodels = [&]() {
-        // A consumed brush pickup has model="" (cleared by the progs) but
-        // retains its modelindex, so it can be associated and hidden.
-        std::vector<bool> hidden(map.Models().size(), false);
-        if (progs.Loaded()) {
-            int f_model = progs.FindField("model");
-            int f_modelindex = progs.FindField("modelindex");
-            int f_solid = progs.FindField("solid");
-            for (int i = 1; i < 1024; i++) {
-                if (progs.EdictFree(i)) continue;
-                const char* m = (f_model >= 0) ? progs.EdictFieldString(i, f_model) : "";
-                int mi = (f_modelindex >= 0) ? (int)progs.EdictFieldFloat(i, f_modelindex) : 0;
-                if (!m[0] && mi > 0 && mi < (int)hidden.size()) {
-                    if (f_solid < 0 || (int)progs.EdictFieldFloat(i, f_solid) == 0)
-                        hidden[mi] = true;
-                }
+    // Shared brush-submodel state, computed on the game thread (reads progs) and
+    // applied on the render thread (Vulkan). `brush_hidden` = consumed pickups;
+    // `brush_deltas` = per-submodel translation for MOVETYPE_PUSH doors.
+    std::vector<bool> brush_hidden;
+    std::map<int, std::array<float,3>> brush_deltas;
+    auto compute_brush_state = [&]() {
+        brush_hidden.assign(map.Models().size(), false);
+        brush_deltas.clear();
+        if (!progs.Loaded()) return;
+        int f_model = progs.FindField("model");
+        int f_modelindex = progs.FindField("modelindex");
+        int f_solid = progs.FindField("solid");
+        int f_movetype = progs.FindField("movetype");
+        int f_origin = progs.FindField("origin");
+        for (int i = 1; i < 1024; i++) {
+            if (progs.EdictFree(i)) continue;
+            const char* m = (f_model >= 0) ? progs.EdictFieldString(i, f_model) : "";
+            int mi = (f_modelindex >= 0) ? (int)progs.EdictFieldFloat(i, f_modelindex) : 0;
+            if (mi <= 0 || mi >= (int)map.Models().size()) continue;
+            int solid = f_solid >= 0 ? (int)progs.EdictFieldFloat(i, f_solid) : 0;
+            // consumed pickup: model cleared + non-solid -> hide
+            if (!m[0] && solid == 0) { brush_hidden[mi] = true; continue; }
+            // moving door: MOVETYPE_PUSH brush -> translation delta
+            if (solid == zq::engine::SOLID_BSP &&
+                f_movetype >= 0 && (int)progs.EdictFieldFloat(i, f_movetype) == zq::engine::MOVE_PUSH &&
+                f_origin >= 0 && (!f_model || (m && m[0] == '*'))) {
+                float o[3]; progs.EdictFieldVector(i, f_origin, o);
+                brush_deltas[mi] = { o[0] - map.Models()[mi].origin[0],
+                                     o[1] - map.Models()[mi].origin[1],
+                                     o[2] - map.Models()[mi].origin[2] };
             }
         }
+    };
+    // Render-thread brush application: assemble drawables (non-hidden) + upload
+    // door translations. Owns submodel_cache / brush_drawables (Vulkan only).
+    auto render_brush = [&](const std::vector<bool>& hidden,
+                            const std::map<int,std::array<float,3>>& deltas) {
         brush_drawables.clear();
         for (int mi = 1; mi < (int)map.Models().size(); mi++) {
             if (hidden[mi]) continue;
@@ -851,73 +875,24 @@ int main(int argc, char** argv) {
             if (!ds) continue;
             brush_drawables.insert(brush_drawables.end(), ds->begin(), ds->end());
         }
-
-        // Translate brush submodels owned by live MOVETYPE_PUSH edicts (doors)
-        // to their current origin. Geometry is baked in submodel space (the
-        // submodel's own origin, usually 0 for func_door), so the re-upload
-        // offset is (edict.origin - submodel.origin). Doors that SPAWN already
-        // displaced (trapdoors, secrets, openings that start open) must render
-        // at that spawn pose, not at the closed pose the brushes were baked in.
-        if (progs.Loaded()) {
-            int f_model = progs.FindField("model");
-            int f_modelindex = progs.FindField("modelindex");
-            int f_solid = progs.FindField("solid");
-            int f_movetype = progs.FindField("movetype");
-            int f_origin = progs.FindField("origin");
-            if (f_solid >= 0 && f_movetype >= 0 && f_origin >= 0) {
-                for (int mi = 1; mi < (int)map.Models().size(); mi++) {
-                    auto it = submodel_cache.find(mi);
-                    if (it == submodel_cache.end() || it->second.base.empty()) continue;
-                    SubmodelCache& sc = it->second;
-                    float delta[3] = { 0, 0, 0 };
-                    bool live = false;
-                    for (int i = 1; i < 1024; i++) {
-                        if (progs.EdictFree(i)) continue;
-                        int mi2 = (int)progs.EdictFieldFloat(i, f_modelindex);
-                        if (mi2 != mi) continue;
-                        if ((int)progs.EdictFieldFloat(i, f_solid) != zq::engine::SOLID_BSP) continue;
-                        if ((int)progs.EdictFieldFloat(i, f_movetype) != zq::engine::MOVE_PUSH) continue;
-                        if (f_model >= 0) {
-                            const char* m2 = progs.EdictFieldString(i, f_model);
-                            if (!(m2 && m2[0] == '*')) continue;
-                        }
-                        float o[3];
-                        progs.EdictFieldVector(i, f_origin, o);
-                        for (int k = 0; k < 3; k++)
-                            delta[k] = o[k] - map.Models()[mi].origin[k];
-                        live = true;
-                        break;
-                    }
-                    if (!live) { for (int k = 0; k < 3; k++) delta[k] = 0.0f; }
-                    if (delta[0] == sc.applied[0] && delta[1] == sc.applied[1] &&
-                        delta[2] == sc.applied[2])
-                        continue;
-                    for (size_t g = 0; g < sc.base.size(); g++) {
-                        auto verts = sc.base[g];
-                        for (auto& v : verts)
-                            for (int k = 0; k < 3; k++) v.pos[k] += delta[k];
-                        vulkan.UpdateBuffer(sc.ds[g].vbuf, verts.data(),
-                                            verts.size() * sizeof(zq::app::WorldVertex));
-                    }
-                    std::memcpy(sc.applied, delta, sizeof(delta));
-                }
+        for (auto& kv : deltas) {
+            int mi = kv.first;
+            auto it = submodel_cache.find(mi);
+            if (it == submodel_cache.end() || it->second.base.empty()) continue;
+            SubmodelCache& sc = it->second;
+            const float* delta = kv.second.data();
+            if (delta[0] == sc.applied[0] && delta[1] == sc.applied[1] &&
+                delta[2] == sc.applied[2]) continue;
+            for (size_t g = 0; g < sc.base.size(); g++) {
+                auto verts = sc.base[g];
+                for (auto& v : verts)
+                    for (int k = 0; k < 3; k++) v.pos[k] += delta[k];
+                vulkan.UpdateBuffer(sc.ds[g].vbuf, verts.data(),
+                                    verts.size() * sizeof(zq::app::WorldVertex));
             }
+            std::memcpy(sc.applied, delta, sizeof(delta));
         }
     };
-    refresh_brush_submodels();
-    {   // confirm every submodel is reachable (no world holes)
-        int covered = 0;
-        for (int mi = 1; mi < (int)map.Models().size(); mi++) {
-            if (submodel_cache.count(mi)) covered++;
-        }
-        if (covered < (int)map.Models().size() - 1) {
-            zq::log::Warn("not all submodels built - world brush may be missing");
-        }
-        char cd[96];
-        std::snprintf(cd, sizeof(cd), "brush submodels drawn: %d/%d", covered,
-                      (int)map.Models().size() - 1);
-        zq::log::Info(cd);
-    }
 
     // TEMP-DIAG: env-gated in-app self test (doors/pickups/monsters). Remove.
     if (getenv("ZQ_SELFTEST") && progs.Loaded()) {
@@ -1179,16 +1154,26 @@ int main(int argc, char** argv) {
     }
     bool rt_built = false;
     uint32_t rtW = 0, rtH = 0;
+    // Swapchain size, written by the render thread (owns Vulkan), read by the
+    // game thread for the camera aspect. Init before the render thread starts.
+    std::atomic<int> swap_w{0}, swap_h{0};
     uint64_t rt_entity_ver = 0;
     std::vector<zq::render::RtLight> rt_lights_all;
+    std::vector<zq::render::RtLight> rt_lights_selected;
     std::map<std::pair<int,int>, std::vector<uint8_t>> rt_skin_cache;
     std::map<std::pair<int,int>, std::uint32_t> rt_skin_tile;
+    // Cache of per-(model, frame) MDL geometry so rebuild_rt_scene doesn't
+    // regenerate identical animation-frame triangles every tick (was ~56ms).
+    std::map<std::pair<int,int>, std::pair<std::vector<zq::app::WorldVertex>,
+                                           std::vector<uint32_t>>> rt_frame_cache;
     // Brush-submodel texture -> atlas tile (mi, tex) so moving door submodels can
     // be re-added dynamically each rebuild via AddMeshWithTile.
     std::map<std::pair<int,int>, std::uint32_t> rt_brush_tile;
     std::vector<zq::render::RtTriangle> rt_static_tris;
     std::vector<uint8_t> rt_atlas;
     std::vector<zq::render::RtTileInfo> rt_tile_infos;
+    uint32_t rt_atlas_w = 0, rt_atlas_h = 0;
+    std::vector<zq::render::RtTriangle> rt_entity_tris;
     bool rt_static_done = false;
     
     // Assemble the ray-traced scene (world + brush submodels + MDL entities)
@@ -1200,15 +1185,24 @@ int main(int argc, char** argv) {
         // cached skin->tile indices so they reference the static atlas.
         auto build_entity_rt_tris = [&]() {
             zq::app::RtSceneBuilder eb;
-            std::vector<zq::app::WorldVertex> scratch;
-            std::vector<uint32_t> tris;
             for (auto& e : entities) {
                 if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
                 LoadedModel* lm = &models[e.model_index];
                 if (!lm->mdl) continue;
                 if (e.frame < 0 || e.frame >= lm->mdl->NumFrames()) continue;
-                tris = build_mdl_frame(*lm->mdl, e.frame, scratch);
-                if (scratch.empty() || tris.empty()) continue;
+                // Cached per-(model, frame) geometry (verts + indices in model
+                // space); only the first use builds it.
+                auto fkey = std::make_pair(e.model_index, e.frame);
+                auto fc = rt_frame_cache.find(fkey);
+                if (fc == rt_frame_cache.end()) {
+                    std::vector<zq::app::WorldVertex> fv;
+                    std::vector<uint32_t> fi;
+                    fi = build_mdl_frame(*lm->mdl, e.frame, fv);
+                    if (fv.empty() || fi.empty()) continue;
+                    fc = rt_frame_cache.emplace(fkey, std::make_pair(std::move(fv), std::move(fi))).first;
+                }
+                const auto& verts = fc->second.first;
+                const auto& ids = fc->second.second;
                 Mat4 t = Mat4::Translate(Vec3{ e.origin[0], e.origin[1], e.origin[2] });
                 Mat4 r = Mat4::RotationZ(DegToRad(e.yaw));
                 Mat4 sm = Mat4::Identity();
@@ -1217,8 +1211,8 @@ int main(int argc, char** argv) {
                 auto key = std::make_pair(e.model_index, e.skin >= 0 ? e.skin : 0);
                 auto ti = rt_skin_tile.find(key);
                 if (ti == rt_skin_tile.end()) continue; // unknown skin (rare)
-                eb.AddMeshWithTile(scratch.data(), scratch.size(), sizeof(zq::app::WorldVertex),
-                                   tris.data(), tris.size(), ti->second, model.m);
+                eb.AddMeshWithTile(verts.data(), verts.size(), sizeof(zq::app::WorldVertex),
+                                   ids.data(), ids.size(), ti->second, model.m);
             }
             // Moving brush submodels (MOVETYPE_PUSH doors): render at their current
             // origin, translated by (edict.origin - submodel.origin), using the
@@ -1332,64 +1326,209 @@ return eb.Triangles();
             rt_atlas = builder.AtlasRgba();
             rt_tile_infos = builder.TileInfos();
             rt_static_done = true;
-            rtW = (uint32_t)(vulkan.GetSwapchainWidth() * rt_scale);
-            rtH = (uint32_t)(vulkan.GetSwapchainHeight() * rt_scale);
+            rtW = (uint32_t)(swap_w.load() * rt_scale);
+            rtH = (uint32_t)(swap_h.load() * rt_scale);
             if (rtW < 1) rtW = 1;
             if (rtH < 1) rtH = 1;
-            if (!rt.BuildScene(rt_static_tris, rt_atlas, builder.AtlasWidth(), builder.AtlasHeight(),
-                               rt_tile_infos, rtW, rtH)) return false;
-            rt.UpdateEntities(build_entity_rt_tris());
-        } else {
-            // ---- REBUILD: only update the dynamic entity BVH ----
-            rt.UpdateEntities(build_entity_rt_tris());
+            rt_atlas_w = builder.AtlasWidth();
+            rt_atlas_h = builder.AtlasHeight();
         }
-        // Install point lights from the progs `light` entities (spawned on the
-        // first game frame). Without these, an interior lit only by a uniform
-        // directional source reads as a flat gray wash.
-        std::vector<zq::render::RtLight> lights;
-        rt_lights_all.clear();
-        if (progs.Loaded()) {
-            int fcn = progs.FindField("classname"), fo = progs.FindField("origin");
-            int fli = progs.FindField("light"), fco = progs.FindField("color");
-            for (int i = 1; i < 1024; i++) {
-                if (progs.EdictFree(i)) continue;
-                const char* c = fcn >= 0 ? progs.EdictFieldString(i, fcn) : "";
-                if (!c || strncmp(c, "light", 5) != 0) continue;
-                zq::render::RtLight L;
-                if (fo >= 0) progs.EdictFieldVector(i, fo, L.pos);
-                float inten = fli >= 0 ? progs.EdictFieldFloat(i, fli) : 1.0f;
-                if (inten <= 0) inten = 1.0f;
-                if (fco >= 0) progs.EdictFieldVector(i, fco, L.color);
-                if (L.color[0] == 0 && L.color[1] == 0 && L.color[2] == 0) { L.color[0]=L.color[1]=L.color[2]=1; }
-                // Brighter lights with a moderate radius; the shader applies inverse-square
-                // falloff (atten ~ intensity / dl^2), so intensity needs to be high.
-                L.intensity = std::min(1.0f, 0.35f + inten * 0.006f);
-                L.radius = std::min(10000.0f, 2000.0f + inten * 15.0f);
-                rt_lights_all.push_back(L);
-            }
-        }
-        rt.SetLights(rt_lights_all);
+        // Produce the dynamic entity triangle list (MDL entities + moving doors).
+        rt_entity_tris = build_entity_rt_tris();
         return true;
     };
 
     uint32_t last_ticks = SDL_GetTicks();
     int frame = 0;
-    // FPS counter: count frames in a rolling window, update the title ~2x/sec.
-    uint32_t fps_frames = 0;
-    uint32_t fps_start = SDL_GetTicks();
-    auto update_title_fps = [&]() {
-        fps_frames++;
-        uint32_t now = SDL_GetTicks();
-        float el = (float)(now - fps_start) / 1000.0f;
-        if (el >= 0.5f) {
-            char title[96];
-            std::snprintf(title, sizeof(title), "zquake  %.0f FPS", fps_frames / el);
-            SDL_SetWindowTitle(window, title);
-            fps_frames = 0;
-            fps_start = now;
-        }
-    };
 
+    // ===================== Two-thread split =====================
+    // Game thread (this loop): input, physics/tick, entity refresh, camera,
+    // and building the RT triangle list + lights. Publishes a value snapshot.
+    // Render thread: owns Vulkan/RayTracer, does the rebuild upload, the RT
+    // dispatch (or raster draw) and present -- decoupled from the game tick.
+
+    // Build the static RT scene data once on the game thread (CPU). The render
+    // thread uploads it to the GPU on its first frame.
+    swap_w = vulkan.GetSwapchainWidth();
+    swap_h = vulkan.GetSwapchainHeight();
+    if (rt_enabled) rebuild_rt_scene();
+
+    struct FrameSnapshot {
+        bool valid = false;
+        bool rt_enabled = false;
+        float proj[16] = {0}, view[16] = {0};
+        float eye[3] = {0,0,0};
+        int sw = 0, sh = 0;
+        std::vector<zq::render::RtLight> lights;
+        struct EntDraw { int edict = 0, model_index = -1, frame = -1, skin = -1;
+                         float o[3] = {0,0,0}; float yaw = 0, scale = 1; };
+        std::vector<EntDraw> entity_draws;
+        std::vector<bool> brush_hidden;
+        std::map<int, std::array<float,3>> brush_deltas;
+    };
+    FrameSnapshot snapshot;
+    std::mutex frame_mutex;
+    bool render_stop = false;
+    uint64_t snapshot_gen = 0;
+    std::vector<bool> raster_hidden_prev;
+    bool raster_hidden_prev_init = false;
+
+    // BVH worker: builds the entity BVH on its own thread so the game thread
+    // never stalls on BuildBvh. Game -> (pending tris) -> worker -> (built
+    // tris+nodes) -> render thread uploads.
+    std::mutex bvh_mutex;
+    std::condition_variable bvh_cv;
+    std::vector<zq::render::RtTriangle> bvh_pending;
+    bool bvh_pending_ready = false;
+    bool bvh_stop = false;
+    std::vector<zq::render::RtTriangle> bvh_built_tris;
+    std::vector<zq::render::BvhNode> bvh_built_nodes;
+    uint64_t bvh_built_gen = 0;
+
+    auto bvh_thread = std::thread([&]() {
+        while (true) {
+            std::vector<zq::render::RtTriangle> tris;
+            {
+                std::unique_lock<std::mutex> lk(bvh_mutex);
+                bvh_cv.wait(lk, [&]{ return bvh_pending_ready || bvh_stop; });
+                if (bvh_stop) return;
+                tris = std::move(bvh_pending);
+                bvh_pending_ready = false;
+            }
+            auto nodes = zq::render::BuildBvh(tris);   // reorders tris in place
+            {
+                std::lock_guard<std::mutex> lk(bvh_mutex);
+                bvh_built_tris = std::move(tris);
+                bvh_built_nodes = std::move(nodes);
+                bvh_built_gen++;
+            }
+        }
+    });
+
+    auto render_thread = std::thread([&]() {
+        uint32_t r_frames = 0, r_start = SDL_GetTicks();
+        uint64_t last_gen = 0;
+        FrameSnapshot f;
+        bool have = false;
+        while (true) {
+            {
+                std::lock_guard<std::mutex> lk(frame_mutex);
+                if (render_stop) return;
+                if (snapshot_gen != last_gen) {
+                    f = snapshot;         // copy the latest published snapshot
+                    last_gen = snapshot_gen;
+                    have = true;
+                }
+            }
+            // Render EVERY iteration, even with no new snapshot: keep presenting
+            // at the render thread's own cadence using the latest camera. Only
+            // skip until the first snapshot exists.
+            if (!have) { SDL_Delay(1); continue; }
+
+            if (f.rt_enabled) {
+                if (!rt_built && !rt_static_tris.empty()) {
+                    rt_built = rt.BuildScene(rt_static_tris, rt_atlas, rt_atlas_w, rt_atlas_h,
+                                             rt_tile_infos, rtW, rtH);
+                }
+                if (rt_built) {
+                    // Upload the latest BVH worker output (if a build finished).
+                    std::vector<zq::render::RtTriangle> bt;
+                    std::vector<zq::render::BvhNode> bn;
+                    static uint64_t last_bvh_gen = 0;
+                    {
+                        std::lock_guard<std::mutex> lk(bvh_mutex);
+                        if (bvh_built_gen != last_bvh_gen) {
+                            bt = bvh_built_tris;
+                            bn = bvh_built_nodes;
+                            last_bvh_gen = bvh_built_gen;
+                        }
+                    }
+                    if (!bt.empty()) rt.UpdateEntities(bt, bn);
+                }
+                if (!rt_built) continue;
+                rt.SetLights(f.lights);
+                if (!vulkan.BeginFrame(false)) continue;
+                vulkan.SetCamera(f.proj, f.view);
+                rt.Dispatch(vulkan.GetActiveCommandBuffer(), f.proj, f.view,
+                            vulkan.GetSwapchainImageView(vulkan.GetCurrentImageIndex()),
+                            vulkan.GetSwapchainWidth(), vulkan.GetSwapchainHeight());
+                vulkan.EndFrame();
+                vulkan.WaitIdle();
+            } else {
+                // Raster path.
+                if (!raster_hidden_prev_init || f.brush_hidden != raster_hidden_prev) {
+                    render_brush(f.brush_hidden, f.brush_deltas);
+                    raster_hidden_prev = f.brush_hidden;
+                    raster_hidden_prev_init = true;
+                } else {
+                    render_brush(f.brush_hidden, f.brush_deltas);
+                }
+                if (!vulkan.BeginFrame()) continue;
+                vulkan.SetCamera(f.proj, f.view);
+                for (auto& d : drawables) {
+                    zq::vk::VulkanAPI::Mesh m;
+                    m.vertex_buffer = d.vbuf; m.index_buffer = d.ibuf;
+                    m.index_count = d.index_count; m.texture = d.tex;
+                    m.lightmap = lightmap; m.has_model = false;
+                    vulkan.DrawMesh(m);
+                }
+                for (auto& d : brush_drawables) {
+                    zq::vk::VulkanAPI::Mesh m;
+                    m.vertex_buffer = d.vbuf; m.index_buffer = d.ibuf;
+                    m.index_count = d.index_count; m.texture = d.tex;
+                    m.lightmap = lightmap; m.has_model = false;
+                    vulkan.DrawMesh(m);
+                }
+                std::vector<zq::app::WorldVertex> scratch;
+                for (auto& e : f.entity_draws) {
+                    if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
+                    LoadedModel* lm = &models[e.model_index];
+                    if (!lm->mdl) continue;
+                    zq::vk::VulkanBuffer* vbuf = mdl_ent_vbuf[e.edict];
+                    if (!vbuf) {
+                        vbuf = vulkan.CreateVertexBuffer(lm->vertex_count * sizeof(zq::app::WorldVertex));
+                        mdl_ent_vbuf[e.edict] = vbuf;
+                        mdl_ent_frame[e.edict] = -1;
+                    }
+                    if (e.frame >= 0 && e.frame < lm->mdl->NumFrames() &&
+                        e.frame != mdl_ent_frame[e.edict]) {
+                        build_mdl_frame(*lm->mdl, e.frame, scratch);
+                        if (!scratch.empty()) {
+                            vulkan.UpdateBuffer(vbuf, scratch.data(),
+                                                scratch.size() * sizeof(zq::app::WorldVertex));
+                            mdl_ent_frame[e.edict] = e.frame;
+                        }
+                    }
+                    Mat4 t = Mat4::Translate(Vec3{ e.o[0], e.o[1], e.o[2] });
+                    Mat4 r = Mat4::RotationZ(DegToRad(e.yaw));
+                    Mat4 sm = Mat4::Identity();
+                    sm.m[0] = e.scale; sm.m[5] = e.scale; sm.m[10] = e.scale;
+                    Mat4 model = t * r * sm;
+                    zq::vk::VulkanAPI::Mesh m;
+                    m.vertex_buffer = vbuf; m.index_buffer = lm->ibuf;
+                    m.index_count = lm->index_count;
+                    m.texture = (e.skin >= 0 && e.skin < (int)lm->skins.size())
+                                    ? lm->skins[e.skin] : lm->skins.empty() ? nullptr : lm->skins[0];
+                    m.lightmap = lightmap; m.has_model = true;
+                    memcpy(m.model, model.m, sizeof(m.model));
+                    vulkan.DrawMesh(m);
+                }
+                vulkan.EndFrame();
+            }
+
+            r_frames++;
+            uint32_t now = SDL_GetTicks();
+            float el = (float)(now - r_start) / 1000.0f;
+            if (el >= 0.5f) {
+                char title[96];
+                std::snprintf(title, sizeof(title), "zquake  %.0f FPS", r_frames / el);
+                SDL_SetWindowTitle(window, title);
+                r_frames = 0; r_start = now;
+            }
+        }
+    });
+
+    // ===================== Game thread loop =====================
     while (running && zq::engine::Host::Instance().GetState() != zq::engine::Host::State::Shutdown) {
         uint32_t now = SDL_GetTicks();
         float dt = (float)(now - last_ticks) / 1000.0f;
@@ -1438,16 +1577,11 @@ return eb.Triangles();
                     if (mi > 0 && mi < (int)map.Models().size()) {
                         float o[3] = {0, 0, 0};
                         if (f_org >= 0) progs.EdictFieldVector(e, f_org, o);
-                        // Movers (doors/walls) only have collision geometry in
-                        // the expanded clip hulls, so trace with the player-sized
-                        // box instead of a point; a start inside solid counts as
-                        // a hit, matching SV_Move's startsolid collapse.
                         const float umin[3] = {-16, -16, -24};
                         const float umax[3] = {16, 16, 32};
                         auto tr = map.ModelTrace(start, end, umin, umax, mi, o);
                         frac = tr.startsolid ? 0.0f : tr.fraction;
                     } else {
-                        // Box entity: point-vs-AABB entry fraction along the ray.
                         float o[3] = {0, 0, 0};
                         if (f_org >= 0) progs.EdictFieldVector(e, f_org, o);
                         float em[3] = {0, 0, 0}, ex[3] = {0, 0, 0};
@@ -1488,28 +1622,18 @@ return eb.Triangles();
             player.on_ground = phys.onground;
         }
 
-        if (frame > 0 && frame < 200 && (frame % 30) == 0) {
-            std::printf("CAM fps%d pos=%.1f %.1f %.1f vel=%.1f %.1f %.1f yaw=%.1f\n",
-                        frame, player.pos.x, player.pos.y, player.pos.z,
-                        player.vel.x, player.vel.y, player.vel.z, player.yaw);
-        }
-
-        // Rebuild the visible MDL list from the live progs entities (so
-        // picked-up items disappear and monsters move to their origins).
+        // Rebuild the visible MDL list from the live progs entities.
         refresh_entities();
-refresh_brush_submodels();
+        compute_brush_state();
 
-        // Rebuild the dynamic entity BVH once after each VM tick (entities were
-        // just refreshed above), gated on the version hash so we only pay the
-        // GPU sync when an entity actually moved or animated. Kept out of the
-        // render path so a rebuild never stalls the frame that presents it.
-        if (rt_built && rt_static_done) {
+        // Build the RT entity triangle list when the dynamic scene changed,
+        // every VM tick (not throttled).
+        bool rt_dirty = false;
+        if (rt_enabled && rt_static_done) {
             uint64_t v = entities.size();
             for (auto& e : entities)
                 v = v*31 + (uint64_t)(int)(e.origin[0]*4) + (uint64_t)(int)(e.origin[1]*4)
                     + (uint64_t)(int)(e.origin[2]*4) + (uint64_t)e.frame;
-            // Include door (MOVETYPE_PUSH brush) origins so the BVH rebuilds
-            // when a door slides open/closed, even if no MDL entity moved.
             if (progs.Loaded()) {
                 int f_s = progs.FindField("solid"),
                     f_mt = progs.FindField("movetype"), f_origin = progs.FindField("origin");
@@ -1523,14 +1647,52 @@ refresh_brush_submodels();
             }
             if (v != rt_entity_ver) {
                 rt_entity_ver = v;
-                uint32_t t0 = SDL_GetTicks();
-                rebuild_rt_scene();
-                if (frame % 60 == 0)
-                    std::printf("DIAG rebuild %dms frame=%d\\n", SDL_GetTicks() - t0, frame);
+                rebuild_rt_scene();       // game thread: cheap, cached tris only
+                rt_dirty = true;
             }
+        } else if (rt_enabled && !rt_static_done) {
+            rebuild_rt_scene();           // first build
+            rt_dirty = true;
         }
 
-        // Camera: eye at pos, look along yaw/pitch
+        // Populate lights each frame (light entities spawn a few ticks in).
+        if (rt_enabled) {
+            rt_lights_all.clear();
+            if (progs.Loaded()) {
+                int fcn = progs.FindField("classname"), fo = progs.FindField("origin");
+                int fli = progs.FindField("light"), fco = progs.FindField("color");
+                for (int i = 1; i < 1024; i++) {
+                    if (progs.EdictFree(i)) continue;
+                    const char* c = fcn >= 0 ? progs.EdictFieldString(i, fcn) : "";
+                    if (!c || strncmp(c, "light", 5) != 0) continue;
+                    zq::render::RtLight L;
+                    if (fo >= 0) progs.EdictFieldVector(i, fo, L.pos);
+                    float inten = fli >= 0 ? progs.EdictFieldFloat(i, fli) : 1.0f;
+                    if (inten <= 0) inten = 1.0f;
+                    if (fco >= 0) progs.EdictFieldVector(i, fco, L.color);
+                    if (L.color[0]==0 && L.color[1]==0 && L.color[2]==0) { L.color[0]=L.color[1]=L.color[2]=1; }
+                    L.intensity = inten;
+                    L.radius = std::min(4000.0f, 1000.0f + inten * 8.0f);
+                    rt_lights_all.push_back(L);
+                }
+            }
+            // nearest-k to the eye
+            int k = (int)std::min<size_t>(rt_lights_all.size(), 12);
+            std::vector<zq::render::RtLight> near(k);
+            for (int i = 0; i < k; i++) near[i] = rt_lights_all[i];
+            auto dist = [&](const zq::render::RtLight& L){
+                float dx=L.pos[0]-player.pos.x, dy=L.pos[1]-player.pos.y, dz=L.pos[2]-player.pos.z;
+                return dx*dx+dy*dy+dz*dz;
+            };
+            for (size_t i = k; i < rt_lights_all.size(); i++) {
+                int worst = 0;
+                for (int j = 1; j < k; j++) if (dist(near[j]) > dist(near[worst])) worst = j;
+                if (dist(rt_lights_all[i]) < dist(near[worst])) near[worst] = rt_lights_all[i];
+            }
+            rt_lights_selected = std::move(near);
+        }
+
+        // Camera.
         float pitch_rad = DegToRad(player.pitch);
         float yaw_rad = DegToRad(player.yaw);
         Vec3 cam_dir = {
@@ -1546,171 +1708,65 @@ refresh_brush_submodels();
         Mat4 proj = Mat4::Perspective(75.0f, aspect, 0.1f, 4096.0f);
         Mat4 view = Mat4::LookAt(eye, center, Vec3{ 0, 0, 1 });
 
-        if (frame == 100) {
-            std::printf("DIAG aspect=%.3f sw=%d sh=%d\n", aspect,
-                        vulkan.GetSwapchainWidth(), vulkan.GetSwapchainHeight());
-            for (int i = 0; i < 16; i += 4)
-                std::printf(" proj[%d..%d]= %.4f %.4f %.4f %.4f\n", i, i+3,
-                            proj.m[i], proj.m[i+1], proj.m[i+2], proj.m[i+3]);
-            for (int i = 0; i < 16; i += 4)
-                std::printf(" view[%d..%d]= %.4f %.4f %.4f %.4f\n", i, i+3,
-                            view.m[i], view.m[i+1], view.m[i+2], view.m[i+3]);
-            std::printf(" eye=%.1f %.1f %.1f center=%.1f %.1f %.1f\n",
-                        eye.x, eye.y, eye.z, center.x, center.y, center.z);
-        }
-
-        if (frame == 100) {
-            std::vector<zq::vk::VulkanAPI::Mesh> meshes;
-            for (auto& d : drawables) {
-                zq::vk::VulkanAPI::Mesh m;
-                m.vertex_buffer = d.vbuf;
-                m.index_buffer = d.ibuf;
-                m.index_count = d.index_count;
-                m.texture = d.tex;
-                m.lightmap = lightmap;
-                m.has_model = false;
-                meshes.push_back(m);
-            }
-            std::vector<uint8_t> px;
-            int W = vulkan.GetSwapchainWidth(), H = vulkan.GetSwapchainHeight();
-            if (vulkan.RenderMeshesToImage(W, H, meshes, px)) {
-                FILE* f = fopen("/tmp/in_game_offscreen.ppm", "wb");
-                if (f) {
-                    fprintf(f, "P6\n%d %d\n255\n", W, H);
-                    for (int y = 0; y < H; y++)
-                        for (int x = 0; x < W; x++) {
-                            size_t i = ((size_t)y*W + x)*4;
-                            fputc(px[i+2], f); fputc(px[i+1], f); fputc(px[i+0], f);
-                        }
-                    fclose(f);
-                }
-            } else {
-                std::printf("DIAG in-game offscreen render FAILED\n");
-            }
-        }
-
+        // Raster entity draw snapshot.
+        FrameSnapshot f;
+        f.valid = true;
+        f.rt_enabled = rt_enabled;
+        for (int i = 0; i < 16; i++) { f.proj[i] = proj.m[i]; f.view[i] = view.m[i]; }
+        f.eye[0] = eye.x; f.eye[1] = eye.y; f.eye[2] = eye.z;
+        f.sw = vulkan.GetSwapchainWidth(); f.sh = vulkan.GetSwapchainHeight();
         if (rt_enabled) {
-            // Build the static scene once. Rebuilding every frame (buffers +
-            // storage image + atlas, each with a vkQueueWaitIdle GPU stall) made
-            // the RT path effectively hang. A single build then a per-frame
-            // dispatch + blit keeps it responsive.
-            if (!rt_built) {
-                rt_built = rebuild_rt_scene();
-                // `light` entities are spawned by the progs a frame or two in;
-                // retry until at least one exists (fallback key light otherwise).
-                if (rt_built && rt.LightCount() == 0 && frame < 40) rt_built = false;
-            }
-            // Install the lights nearest to the camera so the current room is
-            // actually lit (the scene may contain hundreds of lights).
-            if (rt_built && !rt_lights_all.empty()) {
-                int k = (int)std::min<size_t>(rt_lights_all.size(), 24);
-                // partial selection: nearest k to the eye (simple insertion sort)
-                std::vector<zq::render::RtLight> near(k);
-                for (int i = 0; i < k; i++) near[i] = rt_lights_all[i];
-                auto dist = [&](const zq::render::RtLight& L){
-                    float dx=L.pos[0]-eye.x, dy=L.pos[1]-eye.y, dz=L.pos[2]-eye.z;
-                    return dx*dx+dy*dy+dz*dz;
-                };
-                for (size_t i = k; i < rt_lights_all.size(); i++) {
-                    int worst = 0;
-                    for (int j = 1; j < k; j++) if (dist(near[j]) > dist(near[worst])) worst = j;
-                    if (dist(rt_lights_all[i]) < dist(near[worst])) near[worst] = rt_lights_all[i];
+            f.lights = rt_lights_selected;
+            // Hand the new triangle list to the BVH worker thread (not the game
+            // thread); the render thread uploads the worker's built BVH.
+            if (rt_dirty) {
+                {
+                    std::lock_guard<std::mutex> lk(bvh_mutex);
+                    bvh_pending = rt_entity_tris;
+                    bvh_pending_ready = true;
                 }
-                rt.SetLights(near);
+                bvh_cv.notify_one();
             }
-            if (!vulkan.BeginFrame(false)) {  // acquire + begin cmd buffer, no render pass yet
-                continue;
-            }
-            vulkan.SetCamera(proj.m, view.m);
-            rt.Dispatch(vulkan.GetActiveCommandBuffer(), proj.m, view.m,
-                        vulkan.GetSwapchainImageView(vulkan.GetCurrentImageIndex()),
-                        vulkan.GetSwapchainWidth(), vulkan.GetSwapchainHeight());
-            vulkan.EndFrame();
-            // The RT path shares a single storage image across frames; wait for
-            // this frame's GPU work to finish before the next frame writes it,
-            // otherwise two in-flight frames race on the same image (a race that
-            // corrupted the presented image and hung the GPU).
-            vulkan.WaitIdle();
-            SDL_Delay(1);
-            frame++;
-            update_title_fps();
-            continue;
         }
+        for (auto& e : entities) {
+            FrameSnapshot::EntDraw ed;
+            ed.edict = e.edict; ed.model_index = e.model_index; ed.frame = e.frame;
+            ed.skin = e.skin; ed.yaw = e.yaw; ed.scale = e.scale;
+            ed.o[0] = e.origin[0]; ed.o[1] = e.origin[1]; ed.o[2] = e.origin[2];
+            f.entity_draws.push_back(ed);
+        }
+        f.brush_hidden = brush_hidden;
+        f.brush_deltas = brush_deltas;
 
-        if (!vulkan.BeginFrame()) {
-            // swapchain recreated; retry
-            continue;
-        }
-        vulkan.SetCamera(proj.m, view.m);
-        for (auto& d : drawables) {
-            zq::vk::VulkanAPI::Mesh m;
-            m.vertex_buffer = d.vbuf;
-            m.index_buffer = d.ibuf;
-            m.index_count = d.index_count;
-            m.texture = d.tex;
-            m.lightmap = lightmap;
-            m.has_model = false;
-            vulkan.DrawMesh(m);
-        }
-        // Draw live brush submodels (doors, item/ammo boxes) - gated by edict model
-        for (auto& d : brush_drawables) {
-            zq::vk::VulkanAPI::Mesh m;
-            m.vertex_buffer = d.vbuf;
-            m.index_buffer = d.ibuf;
-            m.index_count = d.index_count;
-            m.texture = d.tex;
-            m.lightmap = lightmap;
-            m.has_model = false;
-            vulkan.DrawMesh(m);
-        }
-        // Draw MDL entities at their live origin, current animation frame + skin.
         {
-            std::vector<zq::app::WorldVertex> scratch;
-            for (auto& e : entities) {
-                if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
-                LoadedModel* lm = &models[e.model_index];
-                if (!lm->mdl) continue;
-                // Each entity has its OWN vertex buffer so its frame survives to
-                // GPU execution (a shared model buffer would end up as the last
-                // entity's frame for everyone).
-                zq::vk::VulkanBuffer* vbuf = mdl_ent_vbuf[e.edict];
-                if (!vbuf) {
-                    vbuf = vulkan.CreateVertexBuffer(lm->vertex_count * sizeof(zq::app::WorldVertex));
-                    mdl_ent_vbuf[e.edict] = vbuf;
-                    mdl_ent_frame[e.edict] = -1;
-                }
-                if (e.frame >= 0 && e.frame < lm->mdl->NumFrames() &&
-                    e.frame != mdl_ent_frame[e.edict]) {
-                    build_mdl_frame(*lm->mdl, e.frame, scratch);
-                    if (!scratch.empty()) {
-                        vulkan.UpdateBuffer(vbuf, scratch.data(),
-                                            scratch.size() * sizeof(zq::app::WorldVertex));
-                        mdl_ent_frame[e.edict] = e.frame;
-                    }
-                }
-                Mat4 t = Mat4::Translate(Vec3{ e.origin[0], e.origin[1], e.origin[2] });
-                Mat4 r = Mat4::RotationZ(DegToRad(e.yaw));
-                Mat4 sm = Mat4::Identity();
-                sm.m[0] = e.scale; sm.m[5] = e.scale; sm.m[10] = e.scale;
-                Mat4 model = t * r * sm;
-                zq::vk::VulkanAPI::Mesh m;
-                m.vertex_buffer = vbuf;
-                m.index_buffer = lm->ibuf;
-                m.index_count = lm->index_count;
-                m.texture = (e.skin >= 0 && e.skin < (int)lm->skins.size())
-                                ? lm->skins[e.skin] : lm->skins.empty() ? nullptr : lm->skins[0];
-                m.lightmap = lightmap;
-                m.has_model = true;
-                memcpy(m.model, model.m, sizeof(m.model));
-                vulkan.DrawMesh(m);
-            }
+            std::lock_guard<std::mutex> lk(frame_mutex);
+            snapshot = std::move(f);
+            snapshot_gen++;
         }
-        vulkan.EndFrame();
 
-        SDL_Delay(1);
+        // Pace the game thread to a target tick rate. It's decoupled from the
+        // render thread (which may be slower); latest-wins snapshots keep the
+        // render current without over-driving the game logic or burning CPU.
+        uint32_t tick_elapsed = SDL_GetTicks() - now;
+        int sleep_ms = 14 - (int)tick_elapsed;   // ~72 Hz
+        if (sleep_ms < 1) sleep_ms = 1;
+        SDL_Delay(sleep_ms);
         frame++;
-        update_title_fps();
     }
+
+    // Shutdown the render thread.
+    {
+        std::lock_guard<std::mutex> lk(frame_mutex);
+        render_stop = true;
+    }
+    render_thread.join();
+    // Stop and join the BVH worker thread.
+    {
+        std::lock_guard<std::mutex> lk(bvh_mutex);
+        bvh_stop = true;
+    }
+    bvh_cv.notify_all();
+    bvh_thread.join();
 
     SDL_StopTextInput();
     zq::engine::Host::Instance().Shutdown();

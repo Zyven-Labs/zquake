@@ -40,7 +40,7 @@ public:
     
 private:
     static Key ScancodeToKey(int scancode);
-    
+
     static bool keys_[static_cast<int>(Key::KEY_COUNT)];
     static bool prev_keys_[static_cast<int>(Key::KEY_COUNT)];
     static bool latched_[static_cast<int>(Key::KEY_COUNT)];

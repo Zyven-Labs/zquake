@@ -322,6 +322,19 @@ zquake_spawnview/fast:
 .PHONY : zquake_spawnview/fast
 
 #=============================================================================
+# Target rules for targets named zquake_raytrace
+
+# Build rule for target.
+zquake_raytrace: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 zquake_raytrace
+.PHONY : zquake_raytrace
+
+# fast build rule for target.
+zquake_raytrace/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/build
+.PHONY : zquake_raytrace/fast
+
+#=============================================================================
 # Target rules for targets named Catch2
 
 # Build rule for target.
@@ -371,6 +384,30 @@ src/app/entry_point.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake.dir/build.make CMakeFiles/zquake.dir/src/app/entry_point.cpp.s
 .PHONY : src/app/entry_point.cpp.s
 
+src/app/rt_scene.o: src/app/rt_scene.cpp.o
+.PHONY : src/app/rt_scene.o
+
+# target to build an object file
+src/app/rt_scene.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o
+.PHONY : src/app/rt_scene.cpp.o
+
+src/app/rt_scene.i: src/app/rt_scene.cpp.i
+.PHONY : src/app/rt_scene.i
+
+# target to preprocess a source file
+src/app/rt_scene.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.i
+.PHONY : src/app/rt_scene.cpp.i
+
+src/app/rt_scene.s: src/app/rt_scene.cpp.s
+.PHONY : src/app/rt_scene.s
+
+# target to generate assembly for a file
+src/app/rt_scene.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.s
+.PHONY : src/app/rt_scene.cpp.s
+
 src/app/world_builder.o: src/app/world_builder.cpp.o
 .PHONY : src/app/world_builder.o
 
@@ -379,6 +416,7 @@ src/app/world_builder.cpp.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake.dir/build.make CMakeFiles/zquake.dir/src/app/world_builder.cpp.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_orientation.dir/build.make CMakeFiles/zquake_orientation.dir/src/app/world_builder.cpp.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_spawnview.dir/build.make CMakeFiles/zquake_spawnview.dir/src/app/world_builder.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/src/app/world_builder.cpp.o
 .PHONY : src/app/world_builder.cpp.o
 
 src/app/world_builder.i: src/app/world_builder.cpp.i
@@ -389,6 +427,7 @@ src/app/world_builder.cpp.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake.dir/build.make CMakeFiles/zquake.dir/src/app/world_builder.cpp.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_orientation.dir/build.make CMakeFiles/zquake_orientation.dir/src/app/world_builder.cpp.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_spawnview.dir/build.make CMakeFiles/zquake_spawnview.dir/src/app/world_builder.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/src/app/world_builder.cpp.i
 .PHONY : src/app/world_builder.cpp.i
 
 src/app/world_builder.s: src/app/world_builder.cpp.s
@@ -399,6 +438,7 @@ src/app/world_builder.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake.dir/build.make CMakeFiles/zquake.dir/src/app/world_builder.cpp.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_orientation.dir/build.make CMakeFiles/zquake_orientation.dir/src/app/world_builder.cpp.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_spawnview.dir/build.make CMakeFiles/zquake_spawnview.dir/src/app/world_builder.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/src/app/world_builder.cpp.s
 .PHONY : src/app/world_builder.cpp.s
 
 src/core/container/string.o: src/core/container/string.cpp.o
@@ -1024,6 +1064,54 @@ src/render/font8x8.s: src/render/font8x8.cpp.s
 src/render/font8x8.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/font8x8.cpp.s
 .PHONY : src/render/font8x8.cpp.s
+
+src/render/ray_scene.o: src/render/ray_scene.cpp.o
+.PHONY : src/render/ray_scene.o
+
+# target to build an object file
+src/render/ray_scene.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o
+.PHONY : src/render/ray_scene.cpp.o
+
+src/render/ray_scene.i: src/render/ray_scene.cpp.i
+.PHONY : src/render/ray_scene.i
+
+# target to preprocess a source file
+src/render/ray_scene.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.i
+.PHONY : src/render/ray_scene.cpp.i
+
+src/render/ray_scene.s: src/render/ray_scene.cpp.s
+.PHONY : src/render/ray_scene.s
+
+# target to generate assembly for a file
+src/render/ray_scene.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.s
+.PHONY : src/render/ray_scene.cpp.s
+
+src/render/raytracer.o: src/render/raytracer.cpp.o
+.PHONY : src/render/raytracer.o
+
+# target to build an object file
+src/render/raytracer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o
+.PHONY : src/render/raytracer.cpp.o
+
+src/render/raytracer.i: src/render/raytracer.cpp.i
+.PHONY : src/render/raytracer.i
+
+# target to preprocess a source file
+src/render/raytracer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/raytracer.cpp.i
+.PHONY : src/render/raytracer.cpp.i
+
+src/render/raytracer.s: src/render/raytracer.cpp.s
+.PHONY : src/render/raytracer.s
+
+# target to generate assembly for a file
+src/render/raytracer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_render.dir/build.make CMakeFiles/zq_render.dir/src/render/raytracer.cpp.s
+.PHONY : src/render/raytracer.cpp.s
 
 src/render/software_renderer.o: src/render/software_renderer.cpp.o
 .PHONY : src/render/software_renderer.o
@@ -1769,6 +1857,30 @@ tests/core/progs_vm_test.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_tests.dir/build.make CMakeFiles/zquake_tests.dir/tests/core/progs_vm_test.cpp.s
 .PHONY : tests/core/progs_vm_test.cpp.s
 
+tests/core/ray_scene_test.o: tests/core/ray_scene_test.cpp.o
+.PHONY : tests/core/ray_scene_test.o
+
+# target to build an object file
+tests/core/ray_scene_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_tests.dir/build.make CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o
+.PHONY : tests/core/ray_scene_test.cpp.o
+
+tests/core/ray_scene_test.i: tests/core/ray_scene_test.cpp.i
+.PHONY : tests/core/ray_scene_test.i
+
+# target to preprocess a source file
+tests/core/ray_scene_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_tests.dir/build.make CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.i
+.PHONY : tests/core/ray_scene_test.cpp.i
+
+tests/core/ray_scene_test.s: tests/core/ray_scene_test.cpp.s
+.PHONY : tests/core/ray_scene_test.s
+
+# target to generate assembly for a file
+tests/core/ray_scene_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_tests.dir/build.make CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.s
+.PHONY : tests/core/ray_scene_test.cpp.s
+
 tests/core/vm_test.o: tests/core/vm_test.cpp.o
 .PHONY : tests/core/vm_test.o
 
@@ -1889,6 +2001,30 @@ tests/orientation_test.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_orientation.dir/build.make CMakeFiles/zquake_orientation.dir/tests/orientation_test.cpp.s
 .PHONY : tests/orientation_test.cpp.s
 
+tests/raytrace_test.o: tests/raytrace_test.cpp.o
+.PHONY : tests/raytrace_test.o
+
+# target to build an object file
+tests/raytrace_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/tests/raytrace_test.cpp.o
+.PHONY : tests/raytrace_test.cpp.o
+
+tests/raytrace_test.i: tests/raytrace_test.cpp.i
+.PHONY : tests/raytrace_test.i
+
+# target to preprocess a source file
+tests/raytrace_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/tests/raytrace_test.cpp.i
+.PHONY : tests/raytrace_test.cpp.i
+
+tests/raytrace_test.s: tests/raytrace_test.cpp.s
+.PHONY : tests/raytrace_test.s
+
+# target to generate assembly for a file
+tests/raytrace_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zquake_raytrace.dir/build.make CMakeFiles/zquake_raytrace.dir/tests/raytrace_test.cpp.s
+.PHONY : tests/raytrace_test.cpp.s
+
 tests/real_data_test.o: tests/real_data_test.cpp.o
 .PHONY : tests/real_data_test.o
 
@@ -1983,6 +2119,7 @@ help:
 	@echo "... zquake"
 	@echo "... zquake_inspect"
 	@echo "... zquake_orientation"
+	@echo "... zquake_raytrace"
 	@echo "... zquake_realdata"
 	@echo "... zquake_smoke"
 	@echo "... zquake_spawnview"
@@ -1990,6 +2127,9 @@ help:
 	@echo "... src/app/entry_point.o"
 	@echo "... src/app/entry_point.i"
 	@echo "... src/app/entry_point.s"
+	@echo "... src/app/rt_scene.o"
+	@echo "... src/app/rt_scene.i"
+	@echo "... src/app/rt_scene.s"
 	@echo "... src/app/world_builder.o"
 	@echo "... src/app/world_builder.i"
 	@echo "... src/app/world_builder.s"
@@ -2071,6 +2211,12 @@ help:
 	@echo "... src/render/font8x8.o"
 	@echo "... src/render/font8x8.i"
 	@echo "... src/render/font8x8.s"
+	@echo "... src/render/ray_scene.o"
+	@echo "... src/render/ray_scene.i"
+	@echo "... src/render/ray_scene.s"
+	@echo "... src/render/raytracer.o"
+	@echo "... src/render/raytracer.i"
+	@echo "... src/render/raytracer.s"
 	@echo "... src/render/software_renderer.o"
 	@echo "... src/render/software_renderer.i"
 	@echo "... src/render/software_renderer.s"
@@ -2164,6 +2310,9 @@ help:
 	@echo "... tests/core/progs_vm_test.o"
 	@echo "... tests/core/progs_vm_test.i"
 	@echo "... tests/core/progs_vm_test.s"
+	@echo "... tests/core/ray_scene_test.o"
+	@echo "... tests/core/ray_scene_test.i"
+	@echo "... tests/core/ray_scene_test.s"
 	@echo "... tests/core/vm_test.o"
 	@echo "... tests/core/vm_test.i"
 	@echo "... tests/core/vm_test.s"
@@ -2179,6 +2328,9 @@ help:
 	@echo "... tests/orientation_test.o"
 	@echo "... tests/orientation_test.i"
 	@echo "... tests/orientation_test.s"
+	@echo "... tests/raytrace_test.o"
+	@echo "... tests/raytrace_test.i"
+	@echo "... tests/raytrace_test.s"
 	@echo "... tests/real_data_test.o"
 	@echo "... tests/real_data_test.i"
 	@echo "... tests/real_data_test.s"

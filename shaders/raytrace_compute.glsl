@@ -42,7 +42,7 @@ layout(std140, binding = 2) uniform CamUBO {
     uint triCount;    // number of scene triangles
     uint numLights;   // number of point lights
     uint etriCount;   // number of MDL entity triangles
-    uint _pad5;
+    uint numShadowLights; // how many of the lights cast shadow rays
 } cam;
 
 // Point lights (from map `light` entities). pos.xyz = origin, pos.w = intensity;
@@ -281,14 +281,19 @@ vec3 shade(vec3 o, vec3 d) {
         // falls off ~1/dl^2 away from the light (reaching half at dl=radius).
         float r2 = radius * radius;
         float atten = pl.pos.w * r2 / (r2 + dl * dl);
-        // Offset the shadow origin toward the light (robust against inverted
-        // surface normals that would push the origin INTO the wall and
-        // self-shadow everything). The originating triangle is skipped too.
-        vec3 spo = P + L * max(dl * 1e-3, 0.1);
-        int skipW = (isEnt != 0) ? -1 : srcIdx;
-        int skipE = (isEnt != 0) ? srcIdx : -1;
-        bool shadowed = traceShadow(spo, L, dl - 1e-2, skipW, skipE);
-        float sh = shadowed ? 0.15 : 1.0;
+        // Only the nearest few lights cast shadow rays (they dominate visibility);
+        // the rest illuminate without occlusion. This keeps lighting rich while
+        // bounding shadow-ray cost.
+        float sh = 1.0;
+        if (i < int(cam.numShadowLights)) {
+            // Offset the shadow origin toward the light (robust against inverted
+            // surface normals that would push the origin INTO the wall and
+            // self-shadow everything). The originating triangle is skipped too.
+            vec3 spo = P + L * max(dl * 1e-3, 0.1);
+            int skipW = (isEnt != 0) ? -1 : srcIdx;
+            int skipE = (isEnt != 0) ? srcIdx : -1;
+            sh = traceShadow(spo, L, dl - 1e-2, skipW, skipE) ? 0.15 : 1.0;
+        }
         light += pl.color.rgb * atten * ndl * sh;
     }
     return albedo * light;

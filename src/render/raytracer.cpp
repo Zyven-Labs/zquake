@@ -37,7 +37,7 @@ struct CamUBO {
     std::uint32_t triCount;
     std::uint32_t numLights;
     std::uint32_t etriCount;
-    std::uint32_t pad5;
+    std::uint32_t numShadowLights;
 };
 
 // Point light as laid out for the std430 LightBuf (32 bytes, matches PLight).
@@ -46,16 +46,7 @@ struct LightGPU {
     float color[4];  // rgb = tint, w = radius (0 disables)
 };
 
-// GPU BVH build UBO (std140, 48 bytes), matches the BvhUBO in the build shaders.
-struct BvhUBO {
-    std::uint32_t triCount;
-    std::uint32_t padCount;
-    std::uint32_t _pad0;
-    std::uint32_t _pad1;
-    float bmin[4];
-    float bmax[4];
-};
-struct BvhPC { std::uint32_t depth, sortK, sortJ; };
+
 
 // 4x4 matrix inverse (column-major). Returns true on success.
 bool Mat4Inverse(const float* m, float* out) {
@@ -809,6 +800,7 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
     ubo.triCount = tri_count_;
     ubo.numLights = light_count_;
     ubo.etriCount = etri_count_;
+    ubo.numShadowLights = std::min(light_count_, (std::uint32_t)4);
 
     void* p; if (vkMapMemory(dev_, cam_mem_, 0, sizeof(CamUBO), 0, &p) == VK_SUCCESS) {
         std::memcpy(p, &ubo, sizeof(CamUBO));
@@ -944,202 +936,50 @@ void RayTracer::Dispatch(VkCommandBuffer cmd, const float* projection, const flo
                          0, 0, nullptr, 0, nullptr, 1, &toWrite);
 }
 
-void RayTracer::UpdateEntities(const std::vector<RtTriangle>& tris) {
+void RayTracer::UpdateEntities(std::vector<RtTriangle> tris, const std::vector<BvhNode>& nodes) {
     if (!initialized_ || !compute_set_) return;
     uint32_t N = (std::uint32_t)tris.size();
     etri_count_ = N;
+    enode_count_ = (std::uint32_t)nodes.size();
     if (N == 0) { enode_count_ = 0; return; }
 
-    // Lazily create the GPU BVH build resources.
-    if (!bvh_morton_) {
-        VkDescriptorSetLayoutBinding b[6] = {};
-        b[0] = { 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        b[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        b[2] = { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        b[3] = { 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        b[4] = { 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        b[5] = { 5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-        VkDescriptorSetLayoutCreateInfo li = {};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 6; li.pBindings = b;
-        vkCreateDescriptorSetLayout(dev_, &li, nullptr, &bvh_set_layout_);
-        VkPipelineLayoutCreateInfo pl = {};
-        pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pl.setLayoutCount = 1; pl.pSetLayouts = &bvh_set_layout_;
-        VkPushConstantRange pcr = {};
-        pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT; pcr.offset = 0; pcr.size = sizeof(BvhPC);
-        pl.pushConstantRangeCount = 1; pl.pPushConstantRanges = &pcr;
-        vkCreatePipelineLayout(dev_, &pl, nullptr, &bvh_layout_);
-        const char* paths[4] = { "shaders/spv/bvh_morton_compute.spv", "shaders/spv/bvh_sort_compute.spv",
-                                 "shaders/spv/bvh_build_compute.spv", "shaders/spv/bvh_aabb_compute.spv" };
-        VkPipeline* out[4] = { &bvh_morton_, &bvh_sort_, &bvh_build_, &bvh_aabb_ };
-        for (int p = 0; p < 4; p++) {
-            auto spv = LoadSPVFile(paths[p]);
-            if (spv.empty()) continue;
-            VkShaderModule m = CreateModule(dev_, spv);
-            VkPipelineShaderStageCreateInfo st = {};
-            st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            st.stage = VK_SHADER_STAGE_COMPUTE_BIT; st.module = m; st.pName = "main";
-            VkComputePipelineCreateInfo ci = {};
-            ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            ci.stage = st; ci.layout = bvh_layout_;
-            vkCreateComputePipelines(dev_, VK_NULL_HANDLE, 1, &ci, nullptr, out[p]);
-            vkDestroyShaderModule(dev_, m, nullptr);
-        }
-        VkDescriptorPoolSize ps[2] = {};
-        ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; ps[0].descriptorCount = 5;
-        ps[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; ps[1].descriptorCount = 1;
-        VkDescriptorPoolCreateInfo dpi = {};
-        dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.maxSets = 1; dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
-        vkCreateDescriptorPool(dev_, &dpi, nullptr, &bvh_pool_);
-        VkDescriptorSetAllocateInfo sai = {};
-        sai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        sai.descriptorPool = bvh_pool_; sai.descriptorSetCount = 1; sai.pSetLayouts = &bvh_set_layout_;
-        vkAllocateDescriptorSets(dev_, &sai, &bvh_set_);
-        VkCommandBufferAllocateInfo cai = {};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = cmd_pool_; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cai.commandBufferCount = 1;
-        vkAllocateCommandBuffers(dev_, &cai, &bvh_cb_);
-        VkFenceCreateInfo fci = {}; fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        vkCreateFence(dev_, &fci, nullptr, &bvh_fence_);
-        // scratch + input buffers
-        VkBufferCreateInfo bc = {};
-        bc.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT; bc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        bc.size = 1; vkCreateBuffer(dev_, &bc, nullptr, &morton_buf_); bc.size = 1; vkCreateBuffer(dev_, &bc, nullptr, &order_buf_);
-        bc.size = 1; vkCreateBuffer(dev_, &bc, nullptr, &ent_in_buf_); bc.size = sizeof(BvhUBO); vkCreateBuffer(dev_, &bc, nullptr, &bvh_ubo_);
-        VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(pd_, &mp);
-        auto alloc = [&](VkBuffer buf, VkDeviceMemory& mem, VkDeviceSize bytes) {
-            VkMemoryRequirements r; vkGetBufferMemoryRequirements(dev_, buf, &r);
-            VkMemoryAllocateInfo ai = {}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; ai.allocationSize = r.size;
-            for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
-                if ((r.memoryTypeBits & (1u<<i)) && (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { ai.memoryTypeIndex=i; break; }
-            vkAllocateMemory(dev_, &ai, nullptr, &mem);
-            vkBindBufferMemory(dev_, buf, mem, 0);
-        };
-        alloc(morton_buf_, morton_mem_, 4); alloc(order_buf_, order_mem_, 4); alloc(ent_in_buf_, ent_in_mem_, 1);
-        alloc(bvh_ubo_, bvh_ubo_mem_, sizeof(BvhUBO));
-        morton_buf_ && (morton_cap_ = 4); ent_in_cap_ = 1;
-    }
-
-    // N' = next power of two >= N; depth D = log2(N').
-    uint32_t np2 = 1; while (np2 < N) np2 <<= 1;
-    uint32_t D = 0; { uint32_t t = np2; while (t > 1) { t >>= 1; D++; } }
-
-    // Ensure buffers are large enough.
-    VkDeviceSize inBytes = (VkDeviceSize)N * sizeof(RtTriangle);
-    VkDeviceSize outTris = (VkDeviceSize)np2 * sizeof(RtTriangle);
-    VkDeviceSize outNodes = (VkDeviceSize)(2*np2 - 1) * sizeof(BvhNode);
-    VkDeviceSize mortBytes = (VkDeviceSize)np2 * sizeof(uint32_t) * 2;
-    VkDeviceSize ordBytes = (VkDeviceSize)np2 * sizeof(uint32_t);
-    auto growBuf = [&](VkBuffer& buf, VkDeviceMemory& mem, VkDeviceSize& cap, VkDeviceSize bytes) {
+    // Grow the entity buffers to fit.
+    VkDeviceSize trisBytes = (VkDeviceSize)N * sizeof(RtTriangle);
+    VkDeviceSize nodeBytes = (VkDeviceSize)nodes.size() * sizeof(BvhNode);
+    auto growBuf = [&](VkBuffer& buf, VkDeviceMemory& mem, VkDeviceSize& cap,
+                       VkDeviceSize bytes) {
         if (buf && cap >= bytes) return;
         if (buf) { vkDestroyBuffer(dev_, buf, nullptr); vkFreeMemory(dev_, mem, nullptr); }
         buf = VK_NULL_HANDLE; mem = VK_NULL_HANDLE;
         VkBufferCreateInfo bc = {};
         bc.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bc.size = bytes; bc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT; bc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        bc.size = bytes; bc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         vkCreateBuffer(dev_, &bc, nullptr, &buf);
         VkMemoryRequirements r; vkGetBufferMemoryRequirements(dev_, buf, &r);
-        VkMemoryAllocateInfo ai = {}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; ai.allocationSize = r.size;
+        VkMemoryAllocateInfo ai = {}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = r.size;
         VkPhysicalDeviceMemoryProperties p; vkGetPhysicalDeviceMemoryProperties(pd_, &p);
         for (uint32_t i = 0; i < p.memoryTypeCount; i++)
-            if ((r.memoryTypeBits & (1u<<i)) && (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { ai.memoryTypeIndex=i; break; }
+            if ((r.memoryTypeBits & (1u<<i)) && (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+                (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { ai.memoryTypeIndex=i; break; }
         vkAllocateMemory(dev_, &ai, nullptr, &mem);
         vkBindBufferMemory(dev_, buf, mem, 0);
         cap = bytes;
     };
-    growBuf(ent_in_buf_, ent_in_mem_, ent_in_cap_, inBytes);
-    growBuf(etri_buf_, etri_mem_, etri_cap_, outTris);
-    growBuf(enode_buf_, enode_mem_, enode_cap_, outNodes);
-    growBuf(morton_buf_, morton_mem_, morton_cap_, mortBytes);
-    growBuf(order_buf_, order_mem_, order_cap_, ordBytes);
+    growBuf(etri_buf_, etri_mem_, etri_cap_, trisBytes);
+    growBuf(enode_buf_, enode_mem_, enode_cap_, nodeBytes);
 
-    // Upload input triangles + UBO.
-    void* tp; if (vkMapMemory(dev_, ent_in_mem_, 0, inBytes, 0, &tp) == VK_SUCCESS) {
-        std::memcpy(tp, tris.data(), inBytes); vkUnmapMemory(dev_, ent_in_mem_);
+    void* tp;
+    if (vkMapMemory(dev_, etri_mem_, 0, trisBytes, 0, &tp) == VK_SUCCESS) {
+        std::memcpy(tp, tris.data(), trisBytes);
+        vkUnmapMemory(dev_, etri_mem_);
     }
-    // scene bounds
-    float bmin[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, bmax[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
-    for (auto& t : tris) for (int k = 0; k < 3; k++) {
-        bmin[k] = std::min(bmin[k], std::min(t.p0[k], std::min(t.p1[k], t.p2[k])));
-        bmax[k] = std::max(bmax[k], std::max(t.p0[k], std::max(t.p1[k], t.p2[k])));
+    void* np;
+    if (vkMapMemory(dev_, enode_mem_, 0, nodeBytes, 0, &np) == VK_SUCCESS) {
+        std::memcpy(np, nodes.data(), nodeBytes);
+        vkUnmapMemory(dev_, enode_mem_);
     }
-    BvhUBO ubo = {};
-    ubo.triCount = N; ubo.padCount = np2; ubo._pad0 = 0; ubo._pad1 = 0;
-    for (int k = 0; k < 3; k++) { ubo.bmin[k] = bmin[k]; ubo.bmax[k] = bmax[k]; }
-    void* up; if (vkMapMemory(dev_, bvh_ubo_mem_, 0, sizeof(BvhUBO), 0, &up) == VK_SUCCESS) {
-        std::memcpy(up, &ubo, sizeof(BvhUBO)); vkUnmapMemory(dev_, bvh_ubo_mem_);
-    }
-
-    // Update build descriptors.
-    VkDescriptorBufferInfo di[6] = {
-        { ent_in_buf_, 0, VK_WHOLE_SIZE }, { morton_buf_, 0, VK_WHOLE_SIZE },
-        { order_buf_, 0, VK_WHOLE_SIZE }, { etri_buf_, 0, VK_WHOLE_SIZE },
-        { enode_buf_, 0, VK_WHOLE_SIZE }, { bvh_ubo_, 0, sizeof(BvhUBO) }
-    };
-    VkWriteDescriptorSet dw[6] = {};
-    for (int i = 0; i < 6; i++) {
-        dw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        dw[i].dstSet = bvh_set_; dw[i].dstBinding = i; dw[i].descriptorCount = 1;
-        dw[i].descriptorType = (i == 5) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        dw[i].pBufferInfo = &di[i];
-    }
-    vkUpdateDescriptorSets(dev_, 6, dw, 0, nullptr);
-
-    // Record the build passes.
-    vkResetCommandBuffer(bvh_cb_, 0);
-    VkCommandBufferBeginInfo bi = {};
-    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(bvh_cb_, &bi);
-    auto dispatch = [&](VkPipeline pipe, uint32_t groups) {
-        vkCmdBindPipeline(bvh_cb_, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
-        vkCmdBindDescriptorSets(bvh_cb_, VK_PIPELINE_BIND_POINT_COMPUTE, bvh_layout_, 0, 1, &bvh_set_, 0, nullptr);
-        vkCmdDispatch(bvh_cb_, groups, 1, 1);
-    };
-    // Full compute write->read barrier between passes so each dispatch sees the
-    // previous one's output (required: undefined otherwise, and broken at scale).
-    auto barrier = [&]() {
-        VkMemoryBarrier mb = {};
-        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(bvh_cb_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &mb, 0, nullptr, 0, nullptr);
-    };
-    dispatch(bvh_morton_, (np2 + 255) / 256);
-    barrier();
-    // Bitonic sort: one dispatch per (k, j) step, k/j via push constants so each
-    // dispatch sees its own values (host UBO writes can't vary per-dispatch).
-    BvhPC pc = {};
-    for (uint32_t k = 2; k <= np2; k <<= 1) {
-        for (uint32_t j = k >> 1; j > 0; j >>= 1) {
-            pc.sortK = k; pc.sortJ = j;
-            vkCmdPushConstants(bvh_cb_, bvh_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BvhPC), &pc);
-            dispatch(bvh_sort_, (np2 + 255) / 256);
-            barrier();
-        }
-    }
-    dispatch(bvh_build_, ((2*np2 - 1) + 255) / 256);
-    barrier();
-    for (int d = (int)D; d >= 0; d--) {
-        pc.depth = (uint32_t)d;
-        vkCmdPushConstants(bvh_cb_, bvh_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(BvhPC), &pc);
-        dispatch(bvh_aabb_, (uint32_t)(1u << d) / 256 + 1);
-        barrier();
-    }
-    vkEndCommandBuffer(bvh_cb_);
-
-    VkSubmitInfo si = {};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 1; si.pCommandBuffers = &bvh_cb_;
-    vkResetFences(dev_, 1, &bvh_fence_);
-    if (vkQueueSubmit(queue_, 1, &si, bvh_fence_) == VK_SUCCESS)
-        vkWaitForFences(dev_, 1, &bvh_fence_, VK_TRUE, UINT64_MAX);
-
-    enode_count_ = 2*np2 - 1;
 
     // Update the ray-trace entity descriptors (7,8) to the (possibly resized) buffers.
     VkDescriptorBufferInfo ei = { etri_buf_, 0, VK_WHOLE_SIZE };
@@ -1153,6 +993,7 @@ void RayTracer::UpdateEntities(const std::vector<RtTriangle>& tris) {
     w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &ni;
     vkUpdateDescriptorSets(dev_, 2, w, 0, nullptr);
 }
+
 
 bool RayTracer::ReadbackEntity(std::vector<RtTriangle>& trisOut, std::vector<BvhNode>& nodesOut) const {
     if (!etri_buf_ || !enode_buf_ || etri_count_ == 0) return false;
