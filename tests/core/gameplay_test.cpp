@@ -210,6 +210,52 @@ TEST_CASE("Parity: client impulse 2 selects the shotgun (W_WeaponFrame bind)", "
     REQUIRE((int)vm.EdictFieldFloat(1, fi) == 0);        // QC consumed the impulse
 }
 
+// The retail id1 progs.dat has no muzzle-flash source: bytecode analysis shows
+// no statement ever stores to .effects (EF_MUZZLEFLASH can never appear), so
+// the muzzle strobe is armed from an actual discharge. A frame where the
+// client's .ammo_* drops is exactly one shot fired (shotgun: one shell, nailgun
+// /lightning: decremented every fire frame, rocket: one cell). The axe consumes
+// nothing, so melee never triggers. This test locks in that drain behaviour --
+// the app-side trigger signal that replaces the dead .effects bit.
+TEST_CASE("Gameplay: firing drains ammo per shot (muzzle flash trigger source)", "[gameplay][parity]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    int fit = vm.FindField("items"), fa = vm.FindField("ammo_shells");
+    int fw = vm.FindField("weapon"), fe = vm.FindField("effects");
+    REQUIRE(fa >= 0); REQUIRE(fe >= 0);
+    if (fit >= 0) vm.EdictFieldFloat(1, fit) = (float)((int)vm.EdictFieldFloat(1, fit) | (1 | 4096));
+    vm.EdictFieldFloat(1, fa) = 25.0f;
+    if (fw >= 0) vm.EdictFieldFloat(1, fw) = 1.0f;
+    int fsca = vm.FunctionIndex("W_SetCurrentAmmo");
+    if (fsca > 0) { vm.SetSelfEdict(1); vm.ExecuteProgram(fsca); }
+
+    int ff = vm.FindField("flags");
+    std::vector<SolidEntity> solids;
+    int prev = (int)vm.EdictFieldFloat(1, fa);
+    int drain_frames = 0;
+    bool saw_muzzleflash = false;
+    for (int f = 0; f < 30; f++) {
+        if (ff >= 0)
+            vm.EdictFieldFloat(1, ff) = (float)((int)vm.EdictFieldFloat(1, ff) | 8);
+        BuildSolidList(vm, map, solids, 1);
+        SetGameTraceContext(&map, solids.data(), (int)solids.size(), 1);
+
+        ClientPhysics cin;
+        cin.button0 = 1;            // MOUSE1 held
+        cin.move_vars = MoveVars{};
+        RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+        vm.SetSelfEdict(1); vm.SetOtherEdict(0);
+
+        int now = (int)vm.EdictFieldFloat(1, fa);
+        if (now < prev) drain_frames++;                 // app arms the strobe here
+        if ((int)vm.EdictFieldFloat(1, fe) & 2) saw_muzzleflash = true;
+        prev = now;
+    }
+    REQUIRE(drain_frames >= 2);       // shot1 fires then the 0.5s gate re-arms
+    REQUIRE(!saw_muzzleflash);        // retail progs never sets EF_MUZZLEFLASH
+}
+
 TEST_CASE("Parity: EF_MUZZLEFLASH registers one frame then clears", "[gameplay][parity]") {
     ProgVM vm; BSPMap map;
     if (!SetupGame(vm, map)) return;

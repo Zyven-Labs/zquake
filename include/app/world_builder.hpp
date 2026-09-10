@@ -27,6 +27,12 @@ std::vector<uint8_t> IndexedToRGBA(const zq::engine::BSPTexture& tex,
 std::vector<uint8_t> IndexedToRGBA(const uint8_t* texels, size_t count,
                                    const uint8_t palette[768]);
 
+// MDL skin -> RGBA8 with palette index 0 (Quake's built-in transparent color)
+// mapped to alpha 0. Models like spike.mdl are >70% index-0 background; left
+// opaque, projectiles render as black squares.
+std::vector<uint8_t> IndexedToRGBA_Model(const uint8_t* texels, size_t count,
+                                         const uint8_t palette[768]);
+
 // Gather world faces into per-texture groups (world model faces only;
 // brush pickup/trigger submodels are built separately via BuildSubmodelGroups).
 std::vector<TextureGroup> BuildGroups(const zq::engine::BSPMap& map);

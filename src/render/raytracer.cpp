@@ -25,8 +25,8 @@ std::vector<uint8_t> LoadSPVFile(const char* path) {
     return data;
 }
 
-// Camera UBO, std140 layout (144 bytes). Mirrors the CamUBO block in the
-// compute shader.
+// Camera UBO, std140 layout (192 bytes). Mirrors the CamUBO block in the
+// compute shader. `padEnd` keeps muzzleFlash/muzzleColor aligned to vec4.
 struct CamUBO {
     float invViewProj[16];
     float camPos[4];
@@ -39,6 +39,9 @@ struct CamUBO {
     std::uint32_t etriCount;
     std::uint32_t numShadowLights;
     std::uint32_t gunTriCount;
+    std::uint32_t padEnd;
+    float muzzleFlash[4]; // xyz = viewmodel strobe pos, w = intensity (0 = off)
+    float muzzleColor[4]; // rgb = tint, w = radius
 };
 
 // Point light as laid out for the std430 LightBuf (32 bytes, matches PLight).
@@ -846,6 +849,8 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
     ubo.etriCount = etri_count_;
     ubo.numShadowLights = std::min(light_count_, (std::uint32_t)8);
     ubo.gunTriCount = gtri_count_;
+    std::memcpy(ubo.muzzleFlash, muzzle_flash_, sizeof(ubo.muzzleFlash));
+    std::memcpy(ubo.muzzleColor, muzzle_color_, sizeof(ubo.muzzleColor));
 
     void* p; if (vkMapMemory(dev_, cam_mem_, 0, sizeof(CamUBO), 0, &p) == VK_SUCCESS) {
         std::memcpy(p, &ubo, sizeof(CamUBO));
@@ -899,6 +904,14 @@ void RayTracer::SetLights(const std::vector<RtLight>& lights) {
         vkUnmapMemory(dev_, light_mem_);
     }
     light_count_ = n;
+}
+
+void RayTracer::SetMuzzleFlash(float intensity, const float pos[3],
+                               const float color[3], float radius) {
+    muzzle_flash_[0] = pos[0]; muzzle_flash_[1] = pos[1]; muzzle_flash_[2] = pos[2];
+    muzzle_flash_[3] = intensity;
+    muzzle_color_[0] = color[0]; muzzle_color_[1] = color[1]; muzzle_color_[2] = color[2];
+    muzzle_color_[3] = radius;
 }
 
 void RayTracer::Dispatch(VkCommandBuffer cmd, const float* projection, const float* view,

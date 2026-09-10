@@ -46,6 +46,8 @@ layout(std140, binding = 2) uniform CamUBO {
     uint etriCount;   // number of MDL entity triangles
     uint numShadowLights; // how many of the lights cast shadow rays
     uint gunTriCount; // number of first-person viewmodel triangles
+    vec4 muzzleFlash; // xyz = viewmodel strobe pos, w = intensity (0 = off)
+    vec4 muzzleColor; // rgb = tint, w = radius
 } cam;
 
 // Point lights (from map `light` entities). pos.xyz = origin, pos.w = intensity;
@@ -349,6 +351,27 @@ vec3 directLight(vec3 P, vec3 N, int isEnt, int srcIdx) {
     return light;
 }
 
+// Bilinear fetch of the atlas. The fixed binding-3 sampler is NEAREST (kept
+// for crisp paletted world textures), which destroys the radial alpha gradient
+// of the small emissive glow tiles when minified — soft dots render as blocky
+// squares. texelFetch bypasses the sampler filter, so only the emissive tiles
+// get smooth interpolation.
+vec4 sampleBilinear(vec2 uv) {
+    ivec2 isz = ivec2(cam.atlasSize);
+    vec2 f = uv * vec2(isz) - 0.5;
+    ivec2 b = ivec2(floor(f));
+    ivec2 p00 = clamp(b, ivec2(0), isz - 1);
+    ivec2 p10 = clamp(b + ivec2(1, 0), ivec2(0), isz - 1);
+    ivec2 p01 = clamp(b + ivec2(0, 1), ivec2(0), isz - 1);
+    ivec2 p11 = clamp(b + ivec2(1, 1), ivec2(0), isz - 1);
+    vec2 t = fract(f);
+    vec4 c00 = texelFetch(uAtlas, p00, 0);
+    vec4 c10 = texelFetch(uAtlas, p10, 0);
+    vec4 c01 = texelFetch(uAtlas, p01, 0);
+    vec4 c11 = texelFetch(uAtlas, p11, 0);
+    return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
+}
+
 // Multi-bounce shading: traces the ray, and up to `BOUNCES` specular
 // reflections, accumulating indirect light so lit areas bleed into shadow.
 vec3 rayShade(vec3 o, vec3 d) {
@@ -381,8 +404,17 @@ vec3 rayShade(vec3 o, vec3 d) {
         // emission profile (e.g. radial gradient for soft falloff), with the
         // alpha channel as the glow's opacity mask.
         if (hit.light != 0u) {
-            color += tint.rgb * tint.a * throughput * 1.7;
+            vec4 glow = sampleBilinear(atlasUV);
+            color += glow.rgb * glow.a * throughput * 1.7;
             break;
+        }
+
+        // MDL skins map palette index 0 to transparent (Quake's convention, see
+        // IndexedToRGBA_Model). Cut those texels out instead of shading them
+        // black, then keep tracing past the surface.
+        if (tint.a < 0.5) {
+            ro = P + rd * 1e-2;
+            continue;
         }
 
         color += albedo * throughput * (1.0 - mirror) * directLight(P, N, isEnt, srcIdx);
@@ -418,6 +450,7 @@ void main() {
 
     vec3 color;
     {
+        bool gunShaded = false;
         float gmint;
         Tri ghit; float gu, gv, gt;
         if (traceGun(cam.camPos, d, 1e30, ghit, gu, gv, gt)) {
@@ -428,16 +461,29 @@ void main() {
             // neighbouring tile.
             vec2 px = clamp(uv * ti.zw, vec2(0.5), ti.zw - vec2(0.5));
             vec2 atlasUV = (ti.xy + px) / cam.atlasSize;
-            vec3 albedo = texture(uAtlas, atlasUV).rgb;
-            vec3 n = triNormal(ghit);
-            float lam = max(dot(n, normalize(cam.lightDir)), 0.0);
-            color = albedo * (0.75 + 0.35 * lam) + albedo * 0.05;
-        } else if (cam.triCount == 0u) {
-            // No scene: draw sky.
-            float h = max(d.z, 0.0);
-            color = mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
-        } else {
-            color = rayShade(cam.camPos, d);
+            vec4 gtex = texture(uAtlas, atlasUV);
+            // Transparent (index-0) viewmodel texels fall through to the world.
+            if (gtex.a >= 0.5) {
+                vec3 albedo = gtex.rgb;
+                vec3 n = triNormal(ghit);
+                // Shade the viewmodel with the same point lights + shadow rays as
+                // the world, so walls/entities actually cast shadows onto the gun.
+                // The gun BVH is separate from the shadow BVHs, so srcIdx = -1 and
+                // there is no self-shadow acne. The muzzle strobe reaches the gun
+                // through its world light (mL + the viewmodel fill light).
+                vec3 P = cam.camPos + d * gt;
+                color = albedo * directLight(P, n, 1, -1) + albedo * 0.04;
+                gunShaded = true;
+            }
+        }
+        if (!gunShaded) {
+            if (cam.triCount == 0u) {
+                // No scene: draw sky.
+                float h = max(d.z, 0.0);
+                color = mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
+            } else {
+                color = rayShade(cam.camPos, d);
+            }
         }
     }
     // Desaturate: mix the colour toward its luminance (grey) by `SAT`.

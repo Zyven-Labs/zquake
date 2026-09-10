@@ -85,6 +85,13 @@ public:
     // the blit pass (fragment push constant).
     void SetHealthFraction(float f) { health_ = f < 0.0f ? -1.0f : (f > 1.0f ? 1.0f : f); }
 
+    // Selects the muzzle-flash strobe light for the first-person viewmodel
+    // (the gun overlay does not run through the light list). intensity <= 0
+    // disables it. Read by UpdateCameraUBO on the render thread.
+    void SetMuzzleFlash(float intensity, const float pos[3],
+                        const float color[3], float radius);
+    float MuzzleFlashIntensity() const { return muzzle_flash_[3]; }
+
 private:
     void UpdateCameraUBO(const float* projection, const float* view);
     bool CreatePipelines();
@@ -117,6 +124,8 @@ private:
     std::uint32_t light_count_ = 0;
     float pain_ = 0.0f;
     float health_ = 1.0f;
+    float muzzle_flash_[4] = {0, 0, 0, 0}; // xyz = pos, w = intensity (0 = off)
+    float muzzle_color_[4] = {1.0f, 0.5f, 0.15f, 0}; // rgb = tint, w = radius
 
     VkBuffer tile_buf_ = VK_NULL_HANDLE;
     VkDeviceMemory tile_mem_ = VK_NULL_HANDLE;

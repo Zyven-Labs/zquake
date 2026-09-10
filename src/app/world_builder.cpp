@@ -20,6 +20,19 @@ std::vector<uint8_t> IndexedToRGBA(const uint8_t* texels, size_t count,
     return rgba;
 }
 
+std::vector<uint8_t> IndexedToRGBA_Model(const uint8_t* texels, size_t count,
+                                         const uint8_t palette[768]) {
+    std::vector<uint8_t> rgba(count * 4);
+    for (size_t i = 0; i < count; i++) {
+        uint8_t idx = texels[i];
+        rgba[i * 4 + 0] = palette[idx * 3 + 0];
+        rgba[i * 4 + 1] = palette[idx * 3 + 1];
+        rgba[i * 4 + 2] = palette[idx * 3 + 2];
+        rgba[i * 4 + 3] = (idx == 0) ? 0u : 255u;
+    }
+    return rgba;
+}
+
 namespace {
 // Shared face->TextureGroup builder over a face range.
 std::vector<TextureGroup> BuildGroupsRange(const zq::engine::BSPMap& map,

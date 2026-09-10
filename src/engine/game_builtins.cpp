@@ -4,7 +4,9 @@
 #include "engine/monster_move.hpp"
 #include "engine/cvar_system.hpp"
 #include "engine/particle.hpp"
+#include "engine/muzzle_flash.hpp"
 #include "core/logging/logger.hpp"
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
@@ -296,7 +298,49 @@ void Buf_droptofloor(vm::ProgVM& vm) {
     vm.SetReturnFloat(1);
 }
 
-// Write* (#52-59), centerprint (#73), ambientsound (#74), multicast (#82)
+// ---- SVC_MUZZLEFLASH multicast capture (qw-qc/player.qc muzzleflash()) ----
+// The QW progs signals a shot by writing a tiny message on the MSG_MULTICAST
+// channel and sending it through multicast(). The network message itself is
+// dropped, but we sniff it to raise MuzzleFlashSignal for the app's per-tick
+// muzzle strobe (QW's EF_MUZZLEFLASH in .effects is never set).
+constexpr int MSG_MULTICAST = 4;      // defs.qc
+constexpr int SVC_MUZZLEFLASH = 39;   // defs.qc (qw svc_strings index)
+unsigned char g_mc_buf[8];
+int g_mc_len = 0;
+
+void Mz_writebyte(vm::ProgVM& vm) {
+    if ((int)vm.ParmFloat(0) == MSG_MULTICAST && g_mc_len < (int)sizeof(g_mc_buf))
+        g_mc_buf[g_mc_len++] = (unsigned char)(int)vm.ParmFloat(1);
+}
+
+// WriteShort (#54): extends the buffer so later entity offsets stay aligned.
+void Mz_writeshort(vm::ProgVM& vm) {
+    if ((int)vm.ParmFloat(0) == MSG_MULTICAST && g_mc_len + 2 <= (int)sizeof(g_mc_buf)) {
+        int v = (int)vm.ParmFloat(1);
+        g_mc_buf[g_mc_len++] = (unsigned char)(v & 0xFF);
+        g_mc_buf[g_mc_len++] = (unsigned char)((v >> 8) & 0xFF);
+    }
+}
+
+// WriteEntity (#59): void(float to, entity s)
+void Mz_writeentity(vm::ProgVM& vm) {
+    if ((int)vm.ParmFloat(0) != MSG_MULTICAST || g_mc_len + 2 > (int)sizeof(g_mc_buf)) return;
+    int ent = vm.ParmEdictNum(1);
+    g_mc_buf[g_mc_len++] = (unsigned char)(ent & 0xFF);
+    g_mc_buf[g_mc_len++] = (unsigned char)((ent >> 8) & 0xFF);
+}
+
+// multicast (#82): void(vector where, float set) — sends the built message.
+void Buf_multicast(vm::ProgVM& vm) {
+    if (g_mc_len >= 3 && g_mc_buf[0] == SVC_MUZZLEFLASH) {
+        int ent = g_mc_buf[1] | (g_mc_buf[2] << 8);
+        MuzzleFlashSignal::Signal(ent);
+    }
+    g_mc_len = 0;
+    (void)vm;
+}
+
+// Write* (#52-59), centerprint (#73), ambientsound (#74)
 void Buf_noop(vm::ProgVM& vm) { (void)vm; }
 
 // particle (#48): void(vector org, vector dir, float color, float count) -
@@ -341,14 +385,14 @@ void RegisterGameBuiltins(vm::ProgVM& vm) {
     vm.RegisterBuiltin(47, Buf_nextent);
     vm.RegisterBuiltin(48, Buf_particle);
     vm.RegisterBuiltin(49, Buf_changeyaw);
-    vm.RegisterBuiltin(52, Buf_noop);
-    vm.RegisterBuiltin(53, Buf_noop);
-    vm.RegisterBuiltin(54, Buf_noop);
+    vm.RegisterBuiltin(52, Mz_writebyte);
+    vm.RegisterBuiltin(53, Mz_writebyte);
+    vm.RegisterBuiltin(54, Mz_writeshort);
     vm.RegisterBuiltin(55, Buf_noop);
     vm.RegisterBuiltin(56, Buf_noop);
     vm.RegisterBuiltin(57, Buf_noop);
     vm.RegisterBuiltin(58, Buf_noop);
-    vm.RegisterBuiltin(59, Buf_noop);
+    vm.RegisterBuiltin(59, Mz_writeentity);
     vm.RegisterBuiltin(67, Buf_movetogoal);
     vm.RegisterBuiltin(68, Buf_precache);      // precache_file
     vm.RegisterBuiltin(69, Buf_noop);          // makestatic
@@ -361,7 +405,20 @@ void RegisterGameBuiltins(vm::ProgVM& vm) {
     vm.RegisterBuiltin(78, Buf_setspawnparms);
     vm.RegisterBuiltin(79, Buf_noop);          // logfrag
     vm.RegisterBuiltin(80, Buf_infokey);
-    vm.RegisterBuiltin(82, Buf_noop);          // multicast
+    vm.RegisterBuiltin(82, Buf_multicast);     // multicast
+}
+
+// MuzzleFlashSignal: single pending edict, consumed by the app's battle poll.
+std::atomic<int> MuzzleFlashSignal::pending_edict_{-1};
+
+void MuzzleFlashSignal::Signal(int edict) {
+    pending_edict_.store(edict, std::memory_order_relaxed);
+}
+
+bool MuzzleFlashSignal::Consume(int edict) {
+    // exchange so a stale flash never re-fires on a later tick, and a nonzero
+    // pending flash for a different edict is not lost to a later poll.
+    return pending_edict_.exchange(-1, std::memory_order_relaxed) == edict;
 }
 
 } // namespace zq::engine

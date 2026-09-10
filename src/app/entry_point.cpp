@@ -7,6 +7,7 @@
 #include "engine/mdl_model.hpp"
 #include "engine/move.hpp"
 #include "engine/gameframe.hpp"
+#include "engine/muzzle_flash.hpp"
 #include "engine/particle.hpp"
 #include "vulkan/vulkan_api.hpp"
 #include "filesystem/pak_archive.hpp"
@@ -421,7 +422,13 @@ int main(int argc, char** argv) {
     int vm_weaponframe_ofs = 0;   // client .weaponframe
     int vm_effects_ofs = 0;       // client .effects (EF_MUZZLEFLASH bit)
     int vm_health_ofs = 0;        // client .health
+    int vm_ammo_shells_ofs = 0;   // client .ammo_shells (muzzle-flash drain)
+    int vm_ammo_nails_ofs = 0;    // client .ammo_nails
+    int vm_ammo_rockets_ofs = 0;  // client .ammo_rockets
+    int vm_ammo_cells_ofs = 0;    // client .ammo_cells
     float prev_health = 100.0f;   // last read .health (for pain flash)
+    int prev_ammo_shells = 0, prev_ammo_nails = 0;
+    int prev_ammo_rockets = 0, prev_ammo_cells = 0;
     {
         std::vector<uint8_t> progs_data;
         bool have_progs = false;
@@ -569,7 +576,15 @@ int main(int argc, char** argv) {
             vm_weaponframe_ofs = progs.FindField("weaponframe");
             vm_effects_ofs = progs.FindField("effects");
             vm_health_ofs = progs.FindField("health");
+            vm_ammo_shells_ofs = progs.FindField("ammo_shells");
+            vm_ammo_nails_ofs = progs.FindField("ammo_nails");
+            vm_ammo_rockets_ofs = progs.FindField("ammo_rockets");
+            vm_ammo_cells_ofs = progs.FindField("ammo_cells");
             if (f_health >= 0) prev_health = progs.EdictFieldFloat(CLIENT, f_health);
+            if (vm_ammo_shells_ofs >= 0) prev_ammo_shells = (int)progs.EdictFieldFloat(CLIENT, vm_ammo_shells_ofs);
+            if (vm_ammo_nails_ofs >= 0) prev_ammo_nails = (int)progs.EdictFieldFloat(CLIENT, vm_ammo_nails_ofs);
+            if (vm_ammo_rockets_ofs >= 0) prev_ammo_rockets = (int)progs.EdictFieldFloat(CLIENT, vm_ammo_rockets_ofs);
+            if (vm_ammo_cells_ofs >= 0) prev_ammo_cells = (int)progs.EdictFieldFloat(CLIENT, vm_ammo_cells_ofs);
             zq::log::Info("QuakeC VM: progs.dat loaded, map entities spawned");
         } else {
             zq::log::Warn("progs.dat not found - entity spawn via QuakeC disabled");
@@ -686,7 +701,7 @@ int main(int argc, char** argv) {
         for (int si = 0; si < mdl->NumSkins(); si++) {
             const auto& skin = mdl->Skin(si);
             if (skin.empty()) continue;
-            auto rgba = zq::app::IndexedToRGBA(skin.data(), skin.size(), palette);
+            auto rgba = zq::app::IndexedToRGBA_Model(skin.data(), skin.size(), palette);
             if (rgba.empty()) continue;
             zq::vk::VulkanImage* tex = vulkan.CreateTexture(mdl->SkinWidth(), mdl->SkinHeight(), rgba.data());
             if (tex) skins.push_back(tex);
@@ -760,6 +775,11 @@ int main(int argc, char** argv) {
                 }
                 float scale = 1.0f;
                 if (f_scale >= 0) scale = progs.EdictFieldFloat(i, f_scale);
+                // The QC never sets .scale for most entities (projectiles,
+                // monsters); the field is zeroed at spawn. A 0 scale would
+                // collapse the mesh to a degenerate point in both renderers, so
+                // treat 0 as "no scaling" like the reference engine.
+                if (scale <= 0.0f) scale = 1.0f;
                 int frame = f_frame >= 0 ? (int)progs.EdictFieldFloat(i, f_frame) : 0;
                 int skin = f_skin >= 0 ? (int)progs.EdictFieldFloat(i, f_skin) : 0;
                 if (frame < 0) frame = 0;
@@ -796,6 +816,19 @@ int main(int argc, char** argv) {
     };
     std::map<std::string, int> vm_name_to_mi;
     for (auto p : kViewModelPaths) vm_name_to_mi[p] = load_model(p);
+    // Projectiles and other entity models spawn later than the one-time static
+    // RT build, which registers each model's skin into the atlas exactly once.
+    // A model first seen after that build would have no skin tile and its
+    // entities would be silently skipped (raytracer build_entity_rt_tris). Eager
+    // preload makes every pak MDL available (cheap: they also get Vulkan buffers,
+    // but the first score of small models is minor).
+    for (const auto& e : pak.GetEntries()) {
+        const char* nm = e.name;
+        const char* dot = std::strrchr(nm, '.');
+        if (!(std::strncmp(nm, "progs/", 6) == 0 && dot &&
+              std::strncmp(dot, ".mdl", 4) == 0)) continue;
+        load_model(nm);
+    }
 
     // Brush submodels (doors, breaks, item/ammo boxes, etc.) are NOT part of
     // the static world mesh; they are drawn as separate drawables that are
@@ -1178,13 +1211,13 @@ int main(int argc, char** argv) {
     float vm_health_store = 100.0f; // last read .health (sent to blit HUD)
     float muzzle_flash_timer = 0; // seconds of dynamic-light flash remaining
     float muzzle_pos[3] = {0,0,0}; // world-space barrel position (populated per-tick)
+    float muzzle_light_pos[3] = {0,0,0}; // strobe light origin: gun breach, fwd*22 + 16z
     float eye_pos[3] = {0,0,28};  // camera eye origin (per tick)
     float eye_f[3] = {1,0,0};     // camera forward / right / up basis (per tick)
     float eye_r[3] = {0,-1,0};
     float eye_u[3] = {0,0,1};
     float pain_flash_timer = 0;   // red-screen flash seconds remaining
     float gun_bob_accum = 0;      // seconds driving Quake-style gun/camera bob
-    std::uint32_t rt_muzzle_tile = 0xFFFFFFFFu; // atlas tile for the flash glow
     const float kQuakeViewsizeFudge = 2.0f; // view->origin[2] += 2 at scr_viewsize 100
                                          // (cl.viewheight 22 is folded into the eye)
     std::uint32_t rt_particle_tile = 0xFFFFFFFFu; // atlas tile for particles
@@ -1202,6 +1235,9 @@ int main(int argc, char** argv) {
     // game thread for the camera aspect. Init before the render thread starts.
     std::atomic<int> swap_w{0}, swap_h{0};
     uint64_t rt_entity_ver = 0;
+    uint64_t rt_muzzle_epoch = 0; // bumped on flash arm AND disarm so the scene
+                                  // rebuild always fires on both edges
+    bool rt_muzzle_was_active = false;
     std::vector<zq::render::RtLight> rt_lights_all;
     std::vector<zq::render::RtLight> rt_lights_selected;
     std::map<std::pair<int,int>, std::vector<uint8_t>> rt_skin_cache;
@@ -1322,12 +1358,6 @@ if (rt_particle_tile != 0xFFFFFFFFu) {
                     const std::uint32_t ids[6] = { 0, 1, 2, 0, 2, 3 };
                     eb.AddMeshWithTile(q, 4, sizeof(zq::app::WorldVertex), ids, 6, tile, nullptr, true);
                 };
-                // Muzzle flash: bright orange glow that shrinks with the timer.
-                if (muzzle_flash_timer > 0.0f) {
-                    float t = muzzle_flash_timer / 0.09f;
-                    float half = 2.0f + 4.0f * t;
-                    addGlowQuad(muzzle_pos, eye_r, eye_u, half, half, rt_muzzle_tile);
-                }
                 // Hit-effect particles (blood/sparks/shells): soft white dots.
                 auto parts = zq::engine::ParticleSystem::Snapshot();
                 for (auto& p : parts) {
@@ -1402,7 +1432,7 @@ return eb.Triangles();
                 auto it = rt_skin_cache.find(key);
                 if (it != rt_skin_cache.end()) skinRgba = it->second;
                 else if (!lm->mdl->Skin(key.second).empty()) {
-                    skinRgba = zq::app::IndexedToRGBA(lm->mdl->Skin(key.second).data(), lm->mdl->Skin(key.second).size(), palette);
+                    skinRgba = zq::app::IndexedToRGBA_Model(lm->mdl->Skin(key.second).data(), lm->mdl->Skin(key.second).size(), palette);
                     rt_skin_cache[key] = skinRgba;
                 } else skinRgba.assign((size_t)lm->mdl->SkinWidth()*lm->mdl->SkinHeight()*4, 200);
                 uint32_t tile = builder.RegisterTexture(skinRgba.data(), lm->mdl->SkinWidth(), lm->mdl->SkinHeight());
@@ -1419,14 +1449,14 @@ return eb.Triangles();
                 auto it = rt_skin_cache.find({ mi, 0 });
                 if (it != rt_skin_cache.end()) skinRgba = it->second;
                 else if (!lm.mdl->Skin(0).empty()) {
-                    skinRgba = zq::app::IndexedToRGBA(lm.mdl->Skin(0).data(), lm.mdl->Skin(0).size(), palette);
+                    skinRgba = zq::app::IndexedToRGBA_Model(lm.mdl->Skin(0).data(), lm.mdl->Skin(0).size(), palette);
                     rt_skin_cache[{ mi, 0 }] = skinRgba;
                 } else skinRgba.assign((size_t)lm.mdl->SkinWidth()*lm.mdl->SkinHeight()*4, 200);
                 rt_skin_tile[{ mi, 0 }] = builder.RegisterTexture(skinRgba.data(), lm.mdl->SkinWidth(), lm.mdl->SkinHeight());
             }
 
-            // Register special-purpose emissive tiles: a white soft dot for
-            // particles and an orange radial for the muzzle flash glow.
+            // Register the special-purpose emissive tile: a soft white dot for
+            // hit-effect particles.
             {
                 std::vector<uint8_t> dot(64 * 64 * 4);
                 for (int y = 0; y < 64; y++)
@@ -1439,17 +1469,6 @@ return eb.Triangles();
                         p[0] = 200; p[1] = 200; p[2] = 200; p[3] = a;
                     }
                 rt_particle_tile = builder.RegisterTexture(dot.data(), 64, 64);
-                // Orange radial for the muzzle flash glow
-                for (int y = 0; y < 64; y++)
-                    for (int x = 0; x < 64; x++) {
-                        float dx = (x + 0.5f - 32.0f) / 32.0f;
-                        float dy = (y + 0.5f - 32.0f) / 32.0f;
-                        float r = std::sqrt(dx*dx + dy*dy);
-                        uint8_t a = (uint8_t)(std::max(0.0f, 1.0f - r) * 255.0f);
-                        uint8_t* p = &dot[(y * 64 + x) * 4];
-                        p[0] = 255; p[1] = 140; p[2] = 46; p[3] = a;
-                    }
-                rt_muzzle_tile = builder.RegisterTexture(dot.data(), 64, 64);
             }
 
             rt_atlas = builder.AtlasRgba();
@@ -1507,6 +1526,11 @@ return eb.Triangles();
         float pain = 0;
         float health = 100.0f;
         std::vector<zq::render::RtLight> lights;
+        // Muzzle flash strobe for RT viewmodel shading (offsets its own light).
+        float mz_intensity = 0;
+        float mz_pos[3] = {0,0,0};
+        float mz_color[3] = {0,0,0};
+        float mz_radius = 0;
         struct EntDraw { int edict = 0, model_index = -1, frame = -1, skin = -1;
                          float o[3] = {0,0,0}; float yaw = 0, scale = 1; };
         std::vector<EntDraw> entity_draws;
@@ -1639,6 +1663,7 @@ return eb.Triangles();
                     rt.UpdateGun(gt, gn);
                 }
                 rt.SetLights(f.lights);
+                rt.SetMuzzleFlash(f.mz_intensity, f.mz_pos, f.mz_color, f.mz_radius);
                 rt.SetPainFlash(f.pain);
                 rt.SetHealthFraction(f.health);
                 if (!vulkan.BeginFrame(false)) continue;
@@ -1869,7 +1894,7 @@ return eb.Triangles();
         constexpr float EF_MUZZLEFLASH = 2.0f;
         float cur_health = 100.0f;
         int cur_weaponframe = 0;
-        bool cur_firing = false;
+        bool cur_firing = zq::engine::MuzzleFlashSignal::Consume(kClientEdict);
         if (progs.Loaded()) {
             if (vm_weaponmodel_ofs >= 0) {
                 const char* wm = progs.EdictFieldString(kClientEdict, vm_weaponmodel_ofs);
@@ -1915,8 +1940,30 @@ return eb.Triangles();
                 cur_weaponframe = (int)progs.EdictFieldFloat(kClientEdict, vm_weaponframe_ofs);
             if (vm_effects_ofs >= 0) {
                 float eff = progs.EdictFieldFloat(kClientEdict, vm_effects_ofs);
+                // Retail id1 progs.dat never sets EF_MUZZLEFLASH (verified in
+                // bytecode: no statement stores to .effects). QW progs disable
+                // it too (defs.qc). Keep the bit as a fallback for progs that
+                // do emit it, and synthesize the trigger from an actual
+                // discharge below.
                 if ((int)eff & (int)EF_MUZZLEFLASH) cur_firing = true;
             }
+            // Ammo-drain detection: a frame where .ammo_* decreased means a
+            // gun discharged (shotgun: one shell per shot, nailgun: continuous
+            // nails, lightning: continuous cells, rocket: one cell). The axe
+            // consumes nothing, so melee never strobes. Pickups only increase
+            // ammo and are ignored. Mirrors the QW muzzle flash strobe (dlight
+            // for 0.1s) with no QuakeC edits.
+            int ammo_shells = vm_ammo_shells_ofs >= 0 ? (int)progs.EdictFieldFloat(kClientEdict, vm_ammo_shells_ofs) : 0;
+            int ammo_nails = vm_ammo_nails_ofs >= 0 ? (int)progs.EdictFieldFloat(kClientEdict, vm_ammo_nails_ofs) : 0;
+            int ammo_rockets = vm_ammo_rockets_ofs >= 0 ? (int)progs.EdictFieldFloat(kClientEdict, vm_ammo_rockets_ofs) : 0;
+            int ammo_cells = vm_ammo_cells_ofs >= 0 ? (int)progs.EdictFieldFloat(kClientEdict, vm_ammo_cells_ofs) : 0;
+            if (ammo_shells < prev_ammo_shells || ammo_nails < prev_ammo_nails ||
+                ammo_rockets < prev_ammo_rockets || ammo_cells < prev_ammo_cells)
+                cur_firing = true;
+            prev_ammo_shells = ammo_shells;
+            prev_ammo_nails = ammo_nails;
+            prev_ammo_rockets = ammo_rockets;
+            prev_ammo_cells = ammo_cells;
             if (vm_health_ofs >= 0)
                 cur_health = progs.EdictFieldFloat(kClientEdict, vm_health_ofs);
         }
@@ -1933,10 +1980,19 @@ return eb.Triangles();
         } else {
             vm_viewmodel_mi = -1;
         }
-        // Muzzle flash timer: arm for 0.09s on shot, decay each tick
-        if (cur_firing) muzzle_flash_timer = 0.09f;
+        // Muzzle flash timer: arm for 0.1s on shot (Quake's dlight `die`),
+        // re-arm each tick the flag is up, decay once it clears.
+        if (cur_firing) muzzle_flash_timer = 0.10f;
         else if (muzzle_flash_timer > 0) muzzle_flash_timer -= dt;
         if (muzzle_flash_timer < 0) muzzle_flash_timer = 0;
+        // Scene-version guardrail: bump the epoch on both the start and the end
+        // of the flash. Without the disarm edge the quantized timer changeover
+        // (timer*1000 -> 0) can alias with a pre-flash hash and skip the rebuild,
+        // leaving the muzzle glow quad on the GPU forever.
+        {
+            bool active = muzzle_flash_timer > 0.0f;
+            if (active != rt_muzzle_was_active) { rt_muzzle_epoch++; rt_muzzle_was_active = active; }
+        }
         // Pain flash timer: arm on health drop
         if (cur_health < prev_health - 0.5f) pain_flash_timer = 0.35f;
         else if (pain_flash_timer > 0) pain_flash_timer -= dt;
@@ -1995,6 +2051,11 @@ return eb.Triangles();
             muzzle_pos[0] = gun_x + bx;
             muzzle_pos[1] = gun_y + by;
             muzzle_pos[2] = gun_z + bz;
+            // Quake R_DrawAliasModel places the EF_MUZZLEFLASH dlight at the
+            // viewmodel origin pushed 22 units along forward, 16 up.
+            muzzle_light_pos[0] = gun_x + eye_f[0]*22.0f;
+            muzzle_light_pos[1] = gun_y + eye_f[1]*22.0f;
+            muzzle_light_pos[2] = gun_z + eye_f[2]*22.0f + 16.0f;
 
             // Viewmodel matrix, replicating R_AliasSetUpTransform (r_alias.c):
             // with gun angles == view angles, model +X -> camera forward, +Y ->
@@ -2066,6 +2127,7 @@ return eb.Triangles();
             }
             // Combat poll: viewmodel, muzzle flash, particles, pain, health.
             v = v*31 + (uint64_t)(int)(muzzle_flash_timer * 1000);
+            v = v*31 + (uint64_t)rt_muzzle_epoch;
             v = v*31 + (uint64_t)(int)(muzzle_pos[0] * 8) + (uint64_t)(int)(muzzle_pos[1] * 8)
                 + (uint64_t)(int)(muzzle_pos[2] * 8);
             v = v*31 + (uint64_t)std::max(0, vm_viewmodel_mi * 100 + vm_viewmodel_frame);
@@ -2079,6 +2141,24 @@ return eb.Triangles();
         } else if (rt_enabled && !rt_static_done) {
             rebuild_rt_scene();           // first build
             rt_dirty = true;
+        }
+
+        // Muzzle flash strobe (drives both the world point light below and the
+        // first-person gun shading in the RT shader). Inspired by Quake's
+        // R_DrawAliasModel EF_MUZZLEFLASH dlight: warm colour (1,0.5,0.15),
+        // ~0.1s die, per-frame jitter that reads as a strobe. The attenuation
+        // is I*r*r/(r*r+d*d), so intensity stays near `I` out to almost the
+        // radius; keep I small so the flash tints instead of clipping to white,
+        // and use a wide radius so the glow reaches across the room.
+        float mz_intensity = 0.0f, mz_radius = 0.0f;
+        float mz_pos[3] = {0,0,0}, mz_color[3] = {0,0,0};
+        if (muzzle_flash_timer > 0.0f) {
+            mz_pos[0] = muzzle_light_pos[0];
+            mz_pos[1] = muzzle_light_pos[1];
+            mz_pos[2] = muzzle_light_pos[2];
+            mz_color[0] = 1.0f; mz_color[1] = 0.5f; mz_color[2] = 0.15f;
+            mz_radius = 550.0f + (float)(std::rand() & 31);
+            mz_intensity = 3.0f * (0.8f + 0.7f * (float)(std::rand() % 1000) / 1000.0f);
         }
 
         // Populate lights each frame (light entities spawn a few ticks in).
@@ -2102,14 +2182,17 @@ return eb.Triangles();
                     rt_lights_all.push_back(L);
                 }
             }
-            // Muzzle flash dynamic light: orange point light at the gun barrel
-            // for a brief interval after firing (EF_MUZZLEFLASH or live shot).
-            if (muzzle_flash_timer > 0.0f) {
+            // Muzzle flash strobe: an orange point light at the gun breach for a
+            // brief interval after firing, flickering each frame. Gated on the
+            // flash timer (and scaled by its remaining duration) so the light is
+            // fully removed with no residual glow after the 0.1s strobe.
+            if (mz_intensity > 0.0f && muzzle_flash_timer > 0.0f) {
+                float t = muzzle_flash_timer / 0.10f;
                 zq::render::RtLight mL;
-                mL.pos[0] = muzzle_pos[0]; mL.pos[1] = muzzle_pos[1]; mL.pos[2] = muzzle_pos[2];
-                mL.color[0] = 1.0f; mL.color[1] = 0.6f; mL.color[2] = 0.25f;
-                mL.intensity = 2.0f;
-                mL.radius = 300.0f;
+                mL.pos[0] = mz_pos[0]; mL.pos[1] = mz_pos[1]; mL.pos[2] = mz_pos[2];
+                mL.color[0] = mz_color[0]; mL.color[1] = mz_color[1]; mL.color[2] = mz_color[2];
+                mL.intensity = mz_intensity * (0.5f + 0.5f * t);
+                mL.radius = mz_radius;
                 rt_lights_all.push_back(mL);
             }
             // Viewmodel fill light: a dim warm light near the muzzle keeps the
@@ -2164,6 +2247,10 @@ return eb.Triangles();
         f.sw = vulkan.GetSwapchainWidth(); f.sh = vulkan.GetSwapchainHeight();
         if (rt_enabled) {
             f.lights = rt_lights_selected;
+            f.mz_intensity = mz_intensity;
+            f.mz_pos[0] = mz_pos[0]; f.mz_pos[1] = mz_pos[1]; f.mz_pos[2] = mz_pos[2];
+            f.mz_color[0] = mz_color[0]; f.mz_color[1] = mz_color[1]; f.mz_color[2] = mz_color[2];
+            f.mz_radius = mz_radius;
             // Hand the new triangle list to the BVH worker thread (not the game
             // thread); the render thread uploads the worker's built BVH.
             if (rt_dirty) {
