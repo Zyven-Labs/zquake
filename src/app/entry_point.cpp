@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 #include <map>
 #include <memory>
@@ -1602,6 +1603,23 @@ return eb.Triangles();
             // Full reference game frame: entity/TOSS physics, client thinks,
             // touch/pickup, and the player movement with entity collision.
             UpdateGameFrame(player, dt, map, progs, kClientEdict);
+            if (getenv("ZQ_SCALE") && frame == 45) {
+                for (auto& e : entities) {
+                    if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
+                    LoadedModel* lm = &models[e.model_index];
+                    if (!lm->mdl) continue;
+                    const char* cn = progs.Loaded() ? progs.EdictFieldString(e.edict, progs.FindField("classname")) : "";
+                    if (!(cn && strncmp(cn,"monster",7)==0)) continue;
+                    const float* sc = lm->mdl->Scale();
+                    const float* so = lm->mdl->ScaleOrigin();
+                    std::printf("SCALE ent%d %s scale=(%.4f %.4f %.4f) scale_origin=(%.2f %.2f %.2f)\n",
+                        e.edict, cn, sc[0],sc[1],sc[2], so[0],so[1],so[2]);
+                    int fm=progs.FindField("mins"), fx=progs.FindField("maxs");
+                    float mn[3],mx[3]; progs.EdictFieldVector(e.edict,fm,mn); progs.EdictFieldVector(e.edict,fx,mx);
+                    std::printf("SCALE ent%d mins=(%.0f %.0f %.0f) maxs=(%.0f %.0f %.0f)\n", e.edict, mn[0],mn[1],mn[2], mx[0],mx[1],mx[2]);
+                    break;
+                }
+            }
         } else {
             // No game logic loaded: fall back to bare movement.
             zq::engine::PlayerPhys phys;
@@ -1671,7 +1689,7 @@ return eb.Triangles();
                     if (inten <= 0) inten = 1.0f;
                     if (fco >= 0) progs.EdictFieldVector(i, fco, L.color);
                     if (L.color[0]==0 && L.color[1]==0 && L.color[2]==0) { L.color[0]=L.color[1]=L.color[2]=1; }
-                    L.intensity = inten;
+                    L.intensity = inten * 2.0f;
                     L.radius = std::min(4000.0f, 1000.0f + inten * 8.0f);
                     rt_lights_all.push_back(L);
                 }

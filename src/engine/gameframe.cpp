@@ -58,6 +58,28 @@ void ClipVelocity(const float in[3], const float normal[3], float out[3],
     }
 }
 
+// Reference SV_Impact: two entities have touched, so run their touch
+// functions (self=e1,other=e2, then self=e2,other=e1), preserving self/other
+// so the touch never corrupts the entity globals for later thinks.
+void RunImpact(vm::ProgVM& vm, const Fields& f, int e1, int e2) {
+    int old_self = vm.SelfEdict();
+    int old_other = vm.OtherEdict();
+    auto run = [&](int who, int other) {
+        if (who < 0 || who >= 1024 || vm.EdictFree(who)) return;
+        int touch = vm.EdictFieldInt(who, f.touch);
+        int solid = IntField(vm, who, f.solid);
+        if (!touch || solid == SOLID_NOT) return;
+        vm.SetTime(vm.Time());
+        vm.SetSelfEdict(who);
+        vm.SetOtherEdict(other);
+        vm.ExecuteProgram(touch);
+    };
+    run(e1, e2);
+    if (!vm.EdictFree(e1)) run(e2, e1);
+    vm.SetSelfEdict(old_self);
+    vm.SetOtherEdict(old_other);
+}
+
 // Simple multi-plane fly move for physics entities (SV_FlyMove lite).
 int FlyMoveEnt(vm::ProgVM& vm, const BSPMap& map, const Fields& f, int e,
                float time, const SolidEntity* ents, int num_ents, int ignore) {
@@ -74,6 +96,7 @@ int FlyMoveEnt(vm::ProgVM& vm, const BSPMap& map, const Fields& f, int e,
     int blocked = 0;
 
     for (int bump = 0; bump < 4; bump++) {
+        if (!vel[0] && !vel[1] && !vel[2]) break;   // reference early-out
         float end[3];
         for (int i = 0; i < 3; i++) end[i] = origin[i] + time_left * vel[i];
         auto tr = MoveBox(map, mins, maxs, origin, end, ents, num_ents, ignore);
@@ -92,10 +115,16 @@ int FlyMoveEnt(vm::ProgVM& vm, const BSPMap& map, const Fields& f, int e,
             blocked |= 1;
             if (tr.hit_brush) {
                 SetFlags(vm, e, f.flags, IntFlags(vm, e, f.flags) | FL_ONGROUND);
-                vm.EdictFieldInt(e, f.groundentity) = vm.EdictNumToProg(0);
+                // groundentity = the actual floor entity (reference), not world.
+                vm.EdictFieldInt(e, f.groundentity) = vm.EdictNumToProg(tr.hit_edict);
             }
         }
         if (!tr.plane_normal[2]) blocked |= 2;
+
+        // Run impact between the mover and whatever it hit (world has no touch,
+        // so hitting a wall is a no-op; hitting an entity runs touches).
+        RunImpact(vm, f, e, tr.hit_edict);
+        if (vm.EdictFree(e)) break;
 
         time_left -= time_left * tr.fraction;
         if (numplanes >= 5) { { float z[3]={0,0,0}; vm.SetEdictFieldVector(e, f.velocity, z); } return 3; }
@@ -317,31 +346,6 @@ void RunGameFrame(vm::ProgVM& vm, const BSPMap& map, float dt,
             move_num = (int)fresh.size();
         }
 
-        // SV_RunThink
-        int think = vm.EdictFieldInt(i, f.think);
-        if (think < 0) think = 0;
-        float next = vm.EdictFieldFloat(i, f.nextthink);
-        if (think > 0 && next > 0 && next <= time + dt) {
-            float t = next < time ? time : next;
-            vm.SetTime(t);
-            vm.SetSelfEdict(i);
-            vm.SetOtherEdict(0);
-            vm.EdictFieldFloat(i, f.nextthink) = 0;
-            // SV_RunThink (reference sv_phys.c): `time` is set to the think
-            // time and `self.ltime` is the ABSOLUTE time the entity last
-            // thought. QuakeC computes `nextthink = self.ltime + N` from it, so
-            // storing an elapsed delta here corrupts every door/plat/monster
-            // timer (nextthink lands in the past -> instant snap). frametime is
-            // the elapsed time since the entity's previous think.
-            if (f.ltime >= 0) {
-                float nlt = t - vm.EdictFieldFloat(i, f.ltime);
-                vm.EdictFieldFloat(i, f.ltime) = t;
-                vm.SetFrametime(nlt);
-            }
-            if (!vm.ExecuteProgram(think)) continue;
-            if (vm.EdictFree(i)) continue;
-        }
-
         if (movetype == MOVE_TOSS || movetype == MOVE_BOUNCE ||
             movetype == MOVE_FLY || movetype == MOVE_FLYMISSILE) {
             PhysicsToss(vm, map, f, i, dt, move_ents, move_num, i);
@@ -354,26 +358,81 @@ void RunGameFrame(vm::ProgVM& vm, const BSPMap& map, float dt,
             // its travel instead of sliding the full distance.
             if (f.ltime >= 0) vm.EdictFieldFloat(i, f.ltime) = time;
         } else if (movetype == MOVE_STEP) {
-            // Re-evaluate on-ground each frame: if the monster's box is not
-            // supported, clear FL_ONGROUND so gravity applies. Otherwise a
-            // monster that left a platform (leap, partial edge, pushed) keeps
-            // FL_ONGROUND and hovers - "flies" instead of falling.
-            if (!(IntFlags(vm, i, f.flags) & (FL_FLY | FL_SWIM))) {
-                float mn3[3], mx3[3], o3[3];
-                vm.EdictFieldVector(i, f.mins, mn3);
-                vm.EdictFieldVector(i, f.maxs, mx3);
-                vm.EdictFieldVector(i, f.origin, o3);
-                float down[3] = { o3[0], o3[1], o3[2] - 2.0f };
-                auto ft = MoveBox(map, mn3, mx3, o3, down, move_ents, move_num, i);
-                if (ft.fraction >= 1.0f && !ft.allsolid)
-                    SetFlags(vm, i, f.flags, IntFlags(vm, i, f.flags) & ~FL_ONGROUND);
-            }
-            if (!(IntFlags(vm, i, f.flags) & (FL_ONGROUND | FL_FLY | FL_SWIM))) {
+            // Reference SV_Physics_Step: gravity only when NOT on ground at
+            // frame start (wasonground); friction when on ground; then move;
+            // then re-determine on-ground from the 4 bottom corners.
+            bool wasonground = IntFlags(vm, i, f.flags) & FL_ONGROUND;
+            bool inwater = false; // (Option A: no full water handling)
+            if (!wasonground && !(IntFlags(vm, i, f.flags) & FL_FLY) &&
+                !((IntFlags(vm, i, f.flags) & FL_SWIM) && inwater)) {
                 float vel[3];
                 vm.EdictFieldVector(i, f.velocity, vel);
                 vel[2] -= 800.0f * dt;
                 vm.SetEdictFieldVector(i, f.velocity, vel);
-                FlyMoveEnt(vm, map, f, i, dt, move_ents, move_num, i);
+            }
+            {
+                float vel[3];
+                vm.EdictFieldVector(i, f.velocity, vel);
+                if (vel[0] || vel[1] || vel[2]) {
+                    SetFlags(vm, i, f.flags, IntFlags(vm, i, f.flags) & ~FL_ONGROUND);
+                    if (wasonground) {
+                        // friction (reference: control=max(stopspeed,speed))
+                        float speed = std::sqrt(vel[0]*vel[0] + vel[1]*vel[1]);
+                        if (speed) {
+                            float control = speed < 100.0f ? 100.0f : speed;
+                            float newspeed = speed - dt * control * 4.0f;
+                            if (newspeed < 0) newspeed = 0;
+                            newspeed /= speed;
+                            vel[0] *= newspeed; vel[1] *= newspeed;
+                            vm.SetEdictFieldVector(i, f.velocity, vel);
+                        }
+                    }
+                    FlyMoveEnt(vm, map, f, i, dt, move_ents, move_num, i);
+                }
+            }
+            // Re-determine on-ground: any of the 4 bottom corners at mins[2]-1 inside
+            // solid content (reference SV_Physics_Step). Clear it when NONE are
+            // solid so a monster that steps off a ledge loses ground and falls
+            // instead of keeping a stale FL_ONGROUND and hovering.
+            {
+                float o3[3], mn3[3], mx3[3];
+                vm.EdictFieldVector(i, f.origin, o3);
+                vm.EdictFieldVector(i, f.mins, mn3);
+                vm.EdictFieldVector(i, f.maxs, mx3);
+                float pt[3] = { 0, 0, o3[2] + mn3[2] - 1.0f };
+                bool onground = false;
+                for (int x = 0; x <= 1 && !onground; x++)
+                    for (int y = 0; y <= 1; y++) {
+                        pt[0] = o3[0] + (x ? mx3[0] : mn3[0]);
+                        pt[1] = o3[1] + (y ? mx3[1] : mn3[1]);
+                        if (map.PointContents(pt) == CONTENTS_SOLID) onground = true;
+                    }
+                if (onground)
+                    SetFlags(vm, i, f.flags, IntFlags(vm, i, f.flags) | FL_ONGROUND);
+                else
+                    SetFlags(vm, i, f.flags, IntFlags(vm, i, f.flags) & ~FL_ONGROUND);
+            }
+        }
+
+        // SV_RunThink (reference sv_phys.c: runs AFTER the physics at the end
+        // of the frame, so the physics re-determines on-ground first).
+        {
+            int think = vm.EdictFieldInt(i, f.think);
+            if (think < 0) think = 0;
+            float next = vm.EdictFieldFloat(i, f.nextthink);
+            if (think > 0 && next > 0 && next <= time + dt) {
+                float t = next < time ? time : next;
+                vm.SetTime(t);
+                vm.SetSelfEdict(i);
+                vm.SetOtherEdict(0);
+                vm.EdictFieldFloat(i, f.nextthink) = 0;
+                if (f.ltime >= 0) {
+                    float nlt = t - vm.EdictFieldFloat(i, f.ltime);
+                    vm.EdictFieldFloat(i, f.ltime) = t;
+                    vm.SetFrametime(nlt);
+                }
+                if (!vm.ExecuteProgram(think)) continue;
+                if (vm.EdictFree(i)) continue;
             }
         }
     }
@@ -390,6 +449,12 @@ void CheckTouch(vm::ProgVM& vm, int client_edict, const SolidEntity* ents,
     vm.EdictFieldVector(client_edict, f.origin, corg);
     vm.EdictFieldVector(client_edict, f.mins, cmins);
     vm.EdictFieldVector(client_edict, f.maxs, cmaxs);
+
+    // Save and restore self/other like reference SV_Impact, so running a touch
+    // never leaks a stale self/other into a later monster think/melee (which
+    // would make the melee damage the wrong target - e.g. the monster itself).
+    int old_self = vm.SelfEdict();
+    int old_other = vm.OtherEdict();
 
     for (int i = 1; i < 1024; i++) {
         if (vm.EdictFree(i)) continue;
@@ -417,6 +482,9 @@ void CheckTouch(vm::ProgVM& vm, int client_edict, const SolidEntity* ents,
         vm.ExecuteProgram(touch);
         if (vm.EdictFree(i)) continue;
     }
+
+    vm.SetSelfEdict(old_self);
+    vm.SetOtherEdict(old_other);
 }
 
 } // namespace zq::engine

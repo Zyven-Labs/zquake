@@ -550,6 +550,12 @@ void ProgVM::SetSelfEdict(int edict_num) {
     self_ = EdictNumToProg(edict_num);
 }
 
+int ProgVM::OtherEdict() const {
+    int ofs = FindGlobal("other");
+    if (ofs < 0 || ofs >= (int)globals_.size()) return 0;
+    return ProgToEdictNum(globals_[ofs]);
+}
+
 float ProgVM::Time() const {
     return (global_time_ >= 0) ? ff(globals_[global_time_]) : 0.0f;
 }

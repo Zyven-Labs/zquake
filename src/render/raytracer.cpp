@@ -792,7 +792,7 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
 
     float lx=0.5f, ly=0.5f, lz=1.0f, ll=std::sqrt(lx*lx+ly*ly+lz*lz);
     ubo.lightDir[0] = lx/ll; ubo.lightDir[1] = ly/ll; ubo.lightDir[2] = lz/ll;
-    ubo.lightColor[0] = 0.25f; ubo.lightColor[1] = 0.25f; ubo.lightColor[2] = 0.25f;
+    ubo.lightColor[0] = 1.0f; ubo.lightColor[1] = 1.0f; ubo.lightColor[2] = 1.0f;
     // Low ambient + a strong directional key light (which casts shadows) so
     // surfaces facing the light are clearly brighter than those in shadow.
     ubo.ambient[0] = 0.0f; ubo.ambient[1] = 0.0f; ubo.ambient[2] = 0.0f;
@@ -800,7 +800,7 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
     ubo.triCount = tri_count_;
     ubo.numLights = light_count_;
     ubo.etriCount = etri_count_;
-    ubo.numShadowLights = std::min(light_count_, (std::uint32_t)4);
+    ubo.numShadowLights = std::min(light_count_, (std::uint32_t)8);
 
     void* p; if (vkMapMemory(dev_, cam_mem_, 0, sizeof(CamUBO), 0, &p) == VK_SUCCESS) {
         std::memcpy(p, &ubo, sizeof(CamUBO));

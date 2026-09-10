@@ -87,6 +87,36 @@ bool rayAabb(vec3 o, vec3 d, vec4 amin, vec4 amax, float tMin, float tMax, out f
     return true;
 }
 
+float hash(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+vec3 cosineHemisphere(vec3 N, vec3 seed) {
+    vec3 up = abs(N.y) < 0.99 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3 T = normalize(cross(up, N));
+    vec3 B = cross(N, T);
+
+    // Two independent random numbers
+    float r1 = hash(seed);
+    float r2 = hash(seed + vec3(17.0, 59.0, 113.0));
+
+    // Fixed cosine sample (can be jittered later)
+    // float r1 = 1;
+    // float r2 = 1;
+
+    float phi = 2.0 * 3.14159265 * r1;
+    float cosTheta = sqrt(1.0 - r2);
+    float sinTheta = sqrt(r2);
+
+    return normalize(
+        T * cos(phi) * sinTheta +
+        B * sin(phi) * sinTheta +
+        N * cosTheta
+    );
+}
+
 // Moller-Trumbore, mirrors CPU IntersectRayTriangle. Double-sided.
 bool rayTri(vec3 o, vec3 d, Tri tr, float tMin, float tMax, out float t, out float u, out float v) {
     vec3 e1 = tr.p1.xyz - tr.p0.xyz;
@@ -235,33 +265,9 @@ vec2 interpolateUV(Tri t, float u, float v) {
     return t.uv0 * (1.0 - u - v) + t.uv1 * u + t.uv2 * v;
 }
 
-vec3 shade(vec3 o, vec3 d) {
-    Tri hit;
-    float u, v, t;
-    int isEnt, srcIdx;
-    if (!traceAny(o, d, 1e30, hit, u, v, t, isEnt, srcIdx)) {
-        // Sky: pale gradient based on ray direction height.
-        float h = max(d.z, 0.0);
-        return mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
-    }
-    vec3 P = o + d * t;
-    vec3 N = triNormal(hit);
-    vec2 uv = interpolateUV(hit, u, v);
-
-    // Sample the texture atlas tile at its native size. World-face UVs are not
-    // clamped to [0,1] (a texture tiles across a large wall); wrap with fract so
-    // the tile repeats inside its atlas cell, matching Quake tiling.
-    uint ti2 = hit.tex;
-    vec4 ti = tileInfo[ti2]; // (originU, originV, sizeU, sizeV)
-    vec2 atlasUV = (ti.xy + fract(uv) * ti.zw) / cam.atlasSize;
-    vec3 albedo = texture(uAtlas, atlasUV).rgb;
-
-    // Base ambient.
+// Direct lighting at a surface point: the diffuse term from every point light.
+vec3 directLight(vec3 P, vec3 N, int isEnt, int srcIdx) {
     vec3 light = cam.ambient;
-
-    // Point lights (from map `light` entities): each contributes a diffuse term
-    // with inverse-square falloff and a shadow ray to the light (only geometry
-    // between the surface and the light occludes).
     for (int i = 0; i < int(cam.numLights); i++) {
         PLight pl = lights[i];
         float radius = pl.color.w;
@@ -274,9 +280,7 @@ vec3 shade(vec3 o, vec3 d) {
         // consistently wound, so half the walls' normals point away from the
         // light. Flipping the normal here (no abs) makes every interior wall
         // face the light, then the dot is clamped.
-        vec3 Nl = (dot(N, L) < 0.0) ? -N : N;
-        float ndl = max(dot(Nl, L), 0.0);
-        if (ndl <= 0.0) continue;
+        float ndl = abs(dot(N, L));
         // Inverse-square falloff: at dl=0 the light is at full intensity and it
         // falls off ~1/dl^2 away from the light (reaching half at dl=radius).
         float r2 = radius * radius;
@@ -286,9 +290,6 @@ vec3 shade(vec3 o, vec3 d) {
         // bounding shadow-ray cost.
         float sh = 1.0;
         if (i < int(cam.numShadowLights)) {
-            // Offset the shadow origin toward the light (robust against inverted
-            // surface normals that would push the origin INTO the wall and
-            // self-shadow everything). The originating triangle is skipped too.
             vec3 spo = P + L * max(dl * 1e-3, 0.1);
             int skipW = (isEnt != 0) ? -1 : srcIdx;
             int skipE = (isEnt != 0) ? srcIdx : -1;
@@ -296,7 +297,49 @@ vec3 shade(vec3 o, vec3 d) {
         }
         light += pl.color.rgb * atten * ndl * sh;
     }
-    return albedo * light;
+    return light;
+}
+
+// Multi-bounce shading: traces the ray, and up to `BOUNCES` specular
+// reflections, accumulating indirect light so lit areas bleed into shadow.
+vec3 rayShade(vec3 o, vec3 d) {
+    const int BOUNCES = 4;
+    vec3 color = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    vec3 ro = o, rd = d;
+    float mirror = 0.1;
+
+    for (int bounce = 0; bounce < BOUNCES; bounce++) {
+        Tri hit;
+        float u, v, t;
+        int isEnt, srcIdx;
+        traceAny(ro, rd, 1e30, hit, u, v, t, isEnt, srcIdx);
+        vec3 P = ro + rd * t;
+        vec3 N = triNormal(hit);
+        vec2 uv = interpolateUV(hit, u, v);
+
+        // Sample the texture atlas tile at its native size. World-face UVs are
+        // not clamped to [0,1]; wrap with fract so the tile repeats.
+        uint ti2 = hit.tex;
+        vec4 ti = tileInfo[ti2];
+        vec2 atlasUV = (ti.xy + fract(uv) * ti.zw) / cam.atlasSize;
+        vec3 albedo = texture(uAtlas, atlasUV).rgb;
+        color += albedo * throughput * (1.0 - mirror) * directLight(P, N, isEnt, srcIdx);
+
+
+        if (bounce + 1 >= BOUNCES) break;
+
+        // Reflect the incoming ray about the surface normal (oriented outward
+        // against the ray) and recurse. Attenuate by the surface reflectance so
+        // each bounce contributes less.
+        vec3 Nb = (dot(N, rd) < 0.0) ? N : -N;
+        vec3 R = reflect(rd, Nb);
+        ro = P + Nb * 1e-2;
+        rd = normalize(R);
+        throughput *= mirror;
+        if (dot(throughput, vec3(1.0)) < 1e-4) break;
+    }
+    return color;
 }
 
 void main() {
@@ -318,9 +361,11 @@ void main() {
         float h = max(d.z, 0.0);
         color = mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
     } else {
-        color = shade(cam.camPos, d);
+        color = rayShade(cam.camPos, d);
     }
-    // Gamma lift (linear -> display). Brightens the dark Quake textures.
-    color = pow(color, vec3(1.0 / 2.2));
+    // Desaturate: mix the colour toward its luminance (grey) by `SAT`.
+    const float SAT = 0.5;
+    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+    color = mix(vec3(lum), color, SAT);
     imageStore(outImage, pix, vec4(color, 1.0));
 }

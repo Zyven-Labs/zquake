@@ -1,22 +1,22 @@
-Start testing: Sep 10 00:11 EDT
+Start testing: Sep 10 02:16 EDT
 ----------------------------------------------------------
 1/1 Testing: zquake_tests
 1/1 Test: zquake_tests
 Command: "/home/rechenplan/Code/zyven/zquake/zquake_tests"
 Directory: /home/rechenplan/Code/zyven/zquake
-"zquake_tests" start time: Sep 10 00:11 EDT
+"zquake_tests" start time: Sep 10 02:16 EDT
 Output:
 ----------------------------------------------------------
-Randomness seeded to: 2541144203
+Randomness seeded to: 3523676256
 ===============================================================================
 All tests passed (4308 assertions in 60 test cases)
 
 <end of output>
-Test time =   1.96 sec
+Test time =   2.00 sec
 ----------------------------------------------------------
 Test Passed.
-"zquake_tests" end time: Sep 10 00:11 EDT
-"zquake_tests" time elapsed: 00:00:01
+"zquake_tests" end time: Sep 10 02:16 EDT
+"zquake_tests" time elapsed: 00:00:02
 ----------------------------------------------------------
 
-End testing: Sep 10 00:11 EDT
+End testing: Sep 10 02:16 EDT

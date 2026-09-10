@@ -97,7 +97,7 @@ BSPMap::TraceResult BoxEntityTrace(const SolidEntity& ent,
             bool t1_is_min = t1 < t2;
             float lo = t1_is_min ? t1 : t2;
             float hi = t1_is_min ? t2 : t1;
-            if (lo > tenter) { tenter = lo; axis = i; }
+            if (lo >= tenter) { tenter = lo; axis = i; }
             if (hi < texit) texit = hi;
         }
     }
@@ -131,6 +131,14 @@ BSPMap::TraceResult BoxEntityTrace(const SolidEntity& ent,
         // The box is behind the mover, or the mover starts flush against a face
         // and the move carries it away from the box - free in both cases.
         return trace; // free
+    }
+    // The mover is flush against a face (its centre is exactly on the box
+    // boundary) and moves parallel to it (no motion on that axis) - that's a
+    // graze along the face, not a blocking hit, so the mover can slide freely.
+    for (int i = 0; i < 3; i++) {
+        if (end[i] == start[i] &&
+            (std::fabs(start[i] - bmin[i]) < 1e-4f || std::fabs(start[i] - bmax[i]) < 1e-4f))
+            return trace; // free
     }
     if (tenter >= 1.0f) return trace;
 

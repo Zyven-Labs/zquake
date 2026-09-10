@@ -1,2 +1,2 @@
-zquake_tests 25 0.0785654
+zquake_tests 37 0.0540701
 ---

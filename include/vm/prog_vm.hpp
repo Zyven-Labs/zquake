@@ -115,6 +115,8 @@ public:
 
     // Global/self helpers.
     int Self() const { return self_; }
+    int SelfEdict() const { return ProgToEdictNum(self_); }
+    int OtherEdict() const;              // edict number of the `other` global
     void SetSelfEdict(int edict_num);
     float Time() const;
     void SetTime(float t);
