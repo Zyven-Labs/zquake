@@ -1183,7 +1183,10 @@ int main(int argc, char** argv) {
     float eye_r[3] = {0,-1,0};
     float eye_u[3] = {0,0,1};
     float pain_flash_timer = 0;   // red-screen flash seconds remaining
+    float gun_bob_accum = 0;      // seconds driving Quake-style gun/camera bob
     std::uint32_t rt_muzzle_tile = 0xFFFFFFFFu; // atlas tile for the flash glow
+    const float kQuakeViewsizeFudge = 2.0f; // view->origin[2] += 2 at scr_viewsize 100
+                                         // (cl.viewheight 22 is folded into the eye)
     std::uint32_t rt_particle_tile = 0xFFFFFFFFu; // atlas tile for particles
     zq::render::RayTracer rt;
     if (rt_enabled) {
@@ -1966,31 +1969,40 @@ return eb.Triangles();
         eye_pos[0] = player.pos.x;
         eye_pos[1] = player.pos.y;
         eye_pos[2] = player.pos.z + 28.0f;
-        // Gun position: forward of the eye, centered (no right offset), slightly low.
-        float gun_off_f = 16.0f, gun_off_r = 0.0f, gun_off_u = -6.0f;
-        float gun_x = eye_pos[0] + eye_f[0]*gun_off_f + eye_r[0]*gun_off_r + eye_u[0]*gun_off_u;
-        float gun_y = eye_pos[1] + eye_f[1]*gun_off_f + eye_r[1]*gun_off_r + eye_u[1]*gun_off_u;
-        float gun_z = eye_pos[2] + eye_f[2]*gun_off_f + eye_r[2]*gun_off_r + eye_u[2]*gun_off_u;
-        // Muzzle position: further along the gun barrel.
-        float mzl = (38.0f) / std::sqrt(1.0f*1.0f + 0.50f*0.50f);
-        float bx = (eye_f[0]*1.0f + eye_u[0]*0.50f) * mzl;
-        float by = (eye_f[1]*1.0f + eye_u[1]*0.50f) * mzl;
-        float bz = (eye_f[2]*1.0f + eye_u[2]*0.50f) * mzl;
-        muzzle_pos[0] = gun_x + bx;
-        muzzle_pos[1] = gun_y + by;
-        muzzle_pos[2] = gun_z + bz;
-
-        // Viewmodel matrix. Quake view-models are authored with the BARREL along
-        // model +X; map that to camera forward (with a slight up tilt toward the
-        // screen centre, matching the classic pose), +Y -> right, +Z -> up.
+        // Quake V_CalcBob (view.c): bob amplitude from horizontal speed, whose
+        // phase cycles on cl_bobcycle (0.6s) rising over cl_bobup (0.5) of it.
+        gun_bob_accum += dt;
         {
-            float bl = 1.0f / std::sqrt(1.0f*1.0f + 0.50f*0.50f);
-            float c0x = (eye_f[0]*1.0f + eye_u[0]*0.50f) * bl;
-            float c0y = (eye_f[1]*1.0f + eye_u[1]*0.50f) * bl;
-            float c0z = (eye_f[2]*1.0f + eye_u[2]*0.50f) * bl;
+            const float cl_bob = 0.02f, cl_bobcycle = 0.6f, cl_bobup = 0.5f;
+            float cycle = gun_bob_accum -
+                          (float)(int)(gun_bob_accum / cl_bobcycle) * cl_bobcycle;
+            cycle /= cl_bobcycle;
+            if (cycle < cl_bobup) cycle = 3.14159265f * cycle / cl_bobup;
+            else cycle = 3.14159265f + 3.14159265f * (cycle - cl_bobup) / (1.0f - cl_bobup);
+            float bob = std::sqrt(player.vel.x*player.vel.x + player.vel.y*player.vel.y) * cl_bob;
+            bob = bob*0.3f + bob*0.7f*std::sin(cycle);
+            if (bob > 4.0f) bob = 4.0f;
+            else if (bob < -7.0f) bob = -7.0f;
+            // Quake gun position relative to the eye (view->origin minus vieworg):
+            //   forward[i]*bob*0.4 - (1/32,1/32,1/32) + [0,0,viewsize fudge]
+            float gun_x = eye_pos[0] + eye_f[0]*bob*0.4f - 1.0f/32.0f;
+            float gun_y = eye_pos[1] + eye_f[1]*bob*0.4f - 1.0f/32.0f;
+            float gun_z = eye_pos[2] + eye_f[2]*bob*0.4f + kQuakeViewsizeFudge - 1.0f/32.0f;
+            // Muzzle position: along the barrel (view model +X == camera forward).
+            float bx = eye_f[0]*38.0f;
+            float by = eye_f[1]*38.0f;
+            float bz = eye_f[2]*38.0f;
+            muzzle_pos[0] = gun_x + bx;
+            muzzle_pos[1] = gun_y + by;
+            muzzle_pos[2] = gun_z + bz;
+
+            // Viewmodel matrix, replicating R_AliasSetUpTransform (r_alias.c):
+            // with gun angles == view angles, model +X -> camera forward, +Y ->
+            // -camera right (Quake's `-alias_right`), +Z -> camera up, placed at
+            // the Quake view->origin above.
             float* M = vm_model_mat;
-            M[0] = c0x; M[1] = c0y; M[2] = c0z; M[3] = 0;
-            M[4] = eye_r[0]; M[5] = eye_r[1]; M[6] = eye_r[2]; M[7] = 0;
+            M[0] = eye_f[0]; M[1] = eye_f[1]; M[2] = eye_f[2]; M[3] = 0;
+            M[4] = -eye_r[0]; M[5] = -eye_r[1]; M[6] = -eye_r[2]; M[7] = 0;
             M[8] = eye_u[0]; M[9] = eye_u[1]; M[10] = eye_u[2]; M[11] = 0;
             M[12] = gun_x; M[13] = gun_y; M[14] = gun_z; M[15] = 1;
         }

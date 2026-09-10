@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/zquake.dir/src/app/entry_point.cpp.o CMakeFiles/zquake.dir/src/app/world_builder.cpp.o -o zquake  libzq_vm.a libzq_engine.a libzq_render.a libzq_vulkan.a libzq_subsystems.a libzq_filesystem.a libzq_core.a /usr/lib/x86_64-linux-gnu/libSDL2.so libzq_vm.a libzq_core.a /usr/lib/x86_64-linux-gnu/libvulkan.so 

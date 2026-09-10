@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/zquake_spawnview.dir/tests/spawn_view.cpp.o CMakeFiles/zquake_spawnview.dir/src/app/world_builder.cpp.o -o zquake_spawnview  libzq_engine.a libzq_vulkan.a /usr/lib/x86_64-linux-gnu/libSDL2.so libzq_core.a /usr/lib/x86_64-linux-gnu/libvulkan.so libzq_filesystem.a libzq_subsystems.a libzq_vm.a libzq_core.a 

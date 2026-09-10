@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/zquake_smoke.dir/tests/vulkan_smoke.cpp.o -o zquake_smoke  libzq_vulkan.a /usr/lib/x86_64-linux-gnu/libSDL2.so libzq_core.a /usr/lib/x86_64-linux-gnu/libvulkan.so 
