@@ -117,8 +117,8 @@ zquake: libzq_filesystem.a
 zquake: libzq_core.a
 zquake: /usr/lib/x86_64-linux-gnu/libSDL2.so
 zquake: libzq_vm.a
-zquake: /usr/lib/x86_64-linux-gnu/libvulkan.so
 zquake: libzq_core.a
+zquake: /usr/lib/x86_64-linux-gnu/libvulkan.so
 zquake: CMakeFiles/zquake.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable zquake"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/zquake.dir/link.txt --verbose=$(VERBOSE)

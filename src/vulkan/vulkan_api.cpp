@@ -632,7 +632,7 @@ void VulkanAPI::RecreateSwapchain() {
     swapchain_valid_ = true;
 }
 
-bool VulkanAPI::BeginFrame() {
+bool VulkanAPI::BeginFrame(bool startRenderPass) {
     if (!initialized_ || !swapchain_valid_) return false;
 
     vkWaitForFences(device_, 1, &in_flight_fences_[current_frame_], VK_TRUE, UINT64_MAX);
@@ -657,6 +657,16 @@ bool VulkanAPI::BeginFrame() {
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &begin_info);
+
+    in_frame_ = true;
+    render_pass_active_ = false;
+    if (startRenderPass) BeginRenderPass();
+    return true;
+}
+
+void VulkanAPI::BeginRenderPass() {
+    if (!in_frame_) return;
+    VkCommandBuffer cmd = command_buffers_[current_frame_];
 
     VkClearValue clear_values[2] = {};
     clear_values[0].color = { { 0.05f, 0.06f, 0.12f, 1.0f } };
@@ -690,8 +700,7 @@ bool VulkanAPI::BeginFrame() {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_->GetPipeline());
     }
 
-    in_frame_ = true;
-    return true;
+    render_pass_active_ = true;
 }
 
 void VulkanAPI::SetCamera(const float* projection, const float* view) {
@@ -1067,7 +1076,10 @@ void VulkanAPI::EndFrame() {
     if (!in_frame_) return;
 
     VkCommandBuffer cmd = command_buffers_[current_frame_];
-    vkCmdEndRenderPass(cmd);
+    if (render_pass_active_) {
+        vkCmdEndRenderPass(cmd);
+        render_pass_active_ = false;
+    }
     vkEndCommandBuffer(cmd);
 
     VkSubmitInfo submit = {};

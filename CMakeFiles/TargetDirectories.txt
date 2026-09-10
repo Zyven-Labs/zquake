@@ -13,6 +13,7 @@
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/zquake_realdata.dir
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/zquake_inspect.dir
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/zquake_spawnview.dir
+/home/rechenplan/Code/zyven/zquake/CMakeFiles/zquake_raytrace.dir
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/test.dir
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/edit_cache.dir
 /home/rechenplan/Code/zyven/zquake/CMakeFiles/rebuild_cache.dir

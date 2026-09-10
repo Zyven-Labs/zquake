@@ -47,7 +47,7 @@ set(SHADER_INC_DIR "${CMAKE_BINARY_DIR}/shaders/include")
 # Compile GLSL → SPV at build time
 set(SPV_FILES)
 if(GLSLC)
-    foreach(SHADER forward_vertex.glsl forward_fragment.glsl point_light.glsl sprite_vertex.glsl hud_vertex.glsl)
+    foreach(SHADER forward_vertex.glsl forward_fragment.glsl point_light.glsl sprite_vertex.glsl hud_vertex.glsl raytrace_compute.glsl blit_vertex.glsl blit_fragment.glsl bvh_morton_compute.glsl bvh_sort_compute.glsl bvh_build_compute.glsl bvh_aabb_compute.glsl)
         set(BASE "${SHADER}")
         string(REPLACE ".glsl" "" BASE "${BASE}")
         set(SPV_FILE "${SHADER_SPV_DIR}/${BASE}.spv")
@@ -131,8 +131,11 @@ target_link_libraries(zq_vulkan PUBLIC zq_core Vulkan::Vulkan SDL2::SDL2)
 add_library(zq_render STATIC
     src/render/font8x8.cpp
     src/render/software_renderer.cpp
+    src/render/ray_scene.cpp
+    src/render/raytracer.cpp
+    src/app/rt_scene.cpp
 )
-target_link_libraries(zq_render PUBLIC zq_core SDL2::SDL2)
+target_link_libraries(zq_render PUBLIC zq_core SDL2::SDL2 Vulkan::Vulkan)
 
 # Engine library
 add_library(zq_engine STATIC
@@ -203,12 +206,13 @@ if(ZQ_ENABLE_TESTS)
         tests/core/bsp_test.cpp
         tests/core/move_test.cpp
         tests/core/gameplay_test.cpp
+        tests/core/ray_scene_test.cpp
         tests/filesystem/fs_test.cpp
     )
     target_compile_definitions(zquake_tests PRIVATE
         ZQ_TEST_PROGS_PATH="${CMAKE_SOURCE_DIR}/quake/qw-qc/qwprogs.dat")
     target_link_libraries(zquake_tests PRIVATE
-        zq_core zq_filesystem zq_engine zq_subsystems zq_vulkan zq_vm
+        zq_core zq_filesystem zq_engine zq_subsystems zq_vulkan zq_vm zq_render
         Catch2::Catch2WithMain
     )
     add_test(NAME zquake_tests COMMAND zquake_tests)
@@ -248,6 +252,14 @@ if(ZQ_ENABLE_TESTS)
     )
     target_link_libraries(zquake_spawnview PRIVATE
         zq_engine zq_vulkan SDL2::SDL2 zq_core)
+
+    # GPU ray-tracer regression test (manual, like vulkan_smoke)
+    add_executable(zquake_raytrace
+        tests/raytrace_test.cpp
+        src/app/world_builder.cpp
+    )
+    target_link_libraries(zquake_raytrace PRIVATE
+        zq_render zq_engine zq_filesystem zq_vulkan SDL2::SDL2 zq_core)
 endif()
 
 # Print build summary

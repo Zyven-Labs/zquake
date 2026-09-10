@@ -209,10 +209,24 @@ CMakeFiles/zquake_tests.dir/tests/core/gameplay_test.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zquake_tests.dir/tests/core/gameplay_test.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/tests/core/gameplay_test.cpp -o CMakeFiles/zquake_tests.dir/tests/core/gameplay_test.cpp.s
 
+CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o: CMakeFiles/zquake_tests.dir/flags.make
+CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o: tests/core/ray_scene_test.cpp
+CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o: CMakeFiles/zquake_tests.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o -MF CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o.d -o CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o -c /home/rechenplan/Code/zyven/zquake/tests/core/ray_scene_test.cpp
+
+CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/rechenplan/Code/zyven/zquake/tests/core/ray_scene_test.cpp > CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.i
+
+CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/tests/core/ray_scene_test.cpp -o CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.s
+
 CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o: CMakeFiles/zquake_tests.dir/flags.make
 CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o: tests/filesystem/fs_test.cpp
 CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o: CMakeFiles/zquake_tests.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o -MF CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o.d -o CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o -c /home/rechenplan/Code/zyven/zquake/tests/filesystem/fs_test.cpp
 
 CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.i: cmake_force
@@ -235,6 +249,7 @@ zquake_tests_OBJECTS = \
 "CMakeFiles/zquake_tests.dir/tests/core/bsp_test.cpp.o" \
 "CMakeFiles/zquake_tests.dir/tests/core/move_test.cpp.o" \
 "CMakeFiles/zquake_tests.dir/tests/core/gameplay_test.cpp.o" \
+"CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o" \
 "CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o"
 
 # External object files for target zquake_tests
@@ -250,6 +265,7 @@ zquake_tests: CMakeFiles/zquake_tests.dir/tests/core/console_test.cpp.o
 zquake_tests: CMakeFiles/zquake_tests.dir/tests/core/bsp_test.cpp.o
 zquake_tests: CMakeFiles/zquake_tests.dir/tests/core/move_test.cpp.o
 zquake_tests: CMakeFiles/zquake_tests.dir/tests/core/gameplay_test.cpp.o
+zquake_tests: CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o
 zquake_tests: CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o
 zquake_tests: CMakeFiles/zquake_tests.dir/build.make
 zquake_tests: libzq_core.a
@@ -258,14 +274,15 @@ zquake_tests: libzq_engine.a
 zquake_tests: libzq_subsystems.a
 zquake_tests: libzq_vulkan.a
 zquake_tests: libzq_vm.a
+zquake_tests: libzq_render.a
 zquake_tests: _deps/catch2-build/src/libCatch2Maind.a
 zquake_tests: libzq_filesystem.a
+zquake_tests: libzq_core.a
 zquake_tests: /usr/lib/x86_64-linux-gnu/libvulkan.so
 zquake_tests: /usr/lib/x86_64-linux-gnu/libSDL2.so
-zquake_tests: libzq_core.a
 zquake_tests: _deps/catch2-build/src/libCatch2d.a
 zquake_tests: CMakeFiles/zquake_tests.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Linking CXX executable zquake_tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Linking CXX executable zquake_tests"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/zquake_tests.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

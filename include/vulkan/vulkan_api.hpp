@@ -33,8 +33,25 @@ public:
     bool IsInitialized() const;
 
     // Returns true if the swapchain was recreated (window resize)
-    bool BeginFrame();
+    // If startRenderPass is true (default, raster path) the render pass is
+    // begun immediately. Pass false for compute-driven paths (e.g. ray
+    // tracing) that record a compute dispatch + their own blit before
+    // calling BeginRenderPass() manually.
+    bool BeginFrame(bool startRenderPass = true);
+    // Begins the raster render pass + viewport/scissor + binds the main
+    // graphics pipeline. Used after BeginFrame(false).
+    void BeginRenderPass();
     void EndFrame();
+    // Blocks until all GPU work on the graphics queue has finished. Used by the
+    // ray-traced path, which shares a single storage image across frames.
+    void WaitIdle() { if (queue_) vkQueueWaitIdle(queue_); }
+
+    // Ray-tracing integration helpers.
+    VkCommandBuffer GetActiveCommandBuffer() const { return command_buffers_[current_frame_]; }
+    VkImageView GetSwapchainImageView(uint32_t index) const { return swapchain_image_views_[index]; }
+    uint32_t GetCurrentImageIndex() const { return image_index_; }
+    VkFormat GetSwapchainFormat() const { return swapchain_format_; }
+    uint32_t GetSwapchainImageCount() const { return (uint32_t)swapchain_image_views_.size(); }
 
     // Uploads mesh (position/uv/normal/lightmapuv interleaved) + index buffer.
     struct Mesh {
@@ -151,6 +168,7 @@ private:
     bool swapchain_valid_ = false;
     bool initialized_ = false;
     bool in_frame_ = false;
+    bool render_pass_active_ = false;
 
     // Track created resources for cleanup
     std::vector<VulkanImage*> textures_;

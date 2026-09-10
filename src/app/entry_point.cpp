@@ -11,6 +11,8 @@
 #include "filesystem/pak_archive.hpp"
 #include "core/math/mathf.hpp"
 #include "app/world_builder.hpp"
+#include "app/rt_scene.hpp"
+#include "render/raytracer.hpp"
 #include "core/logging/logger.hpp"
 #include "vm/prog_vm.hpp"
 #include "vm/prog_builtins.hpp"
@@ -1164,8 +1166,229 @@ int main(int argc, char** argv) {
     zq::log::Info("Controls: WASD move, mouse look, space jump, ` console");
     zq::log::Info("Use 'quit' command to exit");
 
+    // ---- Ray-traced path (ZQ_RT=1): a compute-kernel renderer ----
+    const bool rt_enabled = getenv("ZQ_RT") != nullptr;
+    const float rt_scale = 0.75f; // internal render resolution scale (blit upscales)
+    zq::render::RayTracer rt;
+    if (rt_enabled) {
+        if (!rt.Initialize(vulkan.GetPhysicalDevice(), vulkan.GetDevice(),
+                           vulkan.GetGraphicsQueueFamily(), vulkan.GetGraphicsQueue(),
+                           vulkan.GetSwapchainFormat())) {
+            zq::log::Error("raytracer: init failed; falling back to raster");
+        }
+    }
+    bool rt_built = false;
+    uint32_t rtW = 0, rtH = 0;
+    uint64_t rt_entity_ver = 0;
+    std::vector<zq::render::RtLight> rt_lights_all;
+    std::map<std::pair<int,int>, std::vector<uint8_t>> rt_skin_cache;
+    std::map<std::pair<int,int>, std::uint32_t> rt_skin_tile;
+    // Brush-submodel texture -> atlas tile (mi, tex) so moving door submodels can
+    // be re-added dynamically each rebuild via AddMeshWithTile.
+    std::map<std::pair<int,int>, std::uint32_t> rt_brush_tile;
+    std::vector<zq::render::RtTriangle> rt_static_tris;
+    std::vector<uint8_t> rt_atlas;
+    std::vector<zq::render::RtTileInfo> rt_tile_infos;
+    bool rt_static_done = false;
+    
+    // Assemble the ray-traced scene (world + brush submodels + MDL entities)
+    // into a triangle list + texture atlas, then upload to the GPU.
+    auto rebuild_rt_scene = [&]() -> bool {
+        if (!rt.IsInitialized()) return false;
+        zq::app::RtSceneBuilder builder;
+        // Rebuild the dynamic MDL entity triangles (positions/frames), using the
+        // cached skin->tile indices so they reference the static atlas.
+        auto build_entity_rt_tris = [&]() {
+            zq::app::RtSceneBuilder eb;
+            std::vector<zq::app::WorldVertex> scratch;
+            std::vector<uint32_t> tris;
+            for (auto& e : entities) {
+                if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
+                LoadedModel* lm = &models[e.model_index];
+                if (!lm->mdl) continue;
+                if (e.frame < 0 || e.frame >= lm->mdl->NumFrames()) continue;
+                tris = build_mdl_frame(*lm->mdl, e.frame, scratch);
+                if (scratch.empty() || tris.empty()) continue;
+                Mat4 t = Mat4::Translate(Vec3{ e.origin[0], e.origin[1], e.origin[2] });
+                Mat4 r = Mat4::RotationZ(DegToRad(e.yaw));
+                Mat4 sm = Mat4::Identity();
+                sm.m[0] = e.scale; sm.m[5] = e.scale; sm.m[10] = e.scale;
+                Mat4 model = t * r * sm;
+                auto key = std::make_pair(e.model_index, e.skin >= 0 ? e.skin : 0);
+                auto ti = rt_skin_tile.find(key);
+                if (ti == rt_skin_tile.end()) continue; // unknown skin (rare)
+                eb.AddMeshWithTile(scratch.data(), scratch.size(), sizeof(zq::app::WorldVertex),
+                                   tris.data(), tris.size(), ti->second, model.m);
+            }
+            // Moving brush submodels (MOVETYPE_PUSH doors): render at their current
+            // origin, translated by (edict.origin - submodel.origin), using the
+            // texture tiles recorded during the static build.
+            if (progs.Loaded()) {
+                int f_mi = progs.FindField("modelindex"), f_s = progs.FindField("solid"),
+                    f_mt = progs.FindField("movetype"), f_model = progs.FindField("model"),
+                    f_origin = progs.FindField("origin");
+                for (int i = 1; i < 1024; i++) {
+                    if (progs.EdictFree(i)) continue;
+                    int mi2 = (int)progs.EdictFieldFloat(i, f_mi);
+                    if (mi2 < 1 || mi2 >= (int)map.Models().size()) continue;
+                    if ((int)progs.EdictFieldFloat(i, f_s) != zq::engine::SOLID_BSP) continue;
+                    if ((int)progs.EdictFieldFloat(i, f_mt) != zq::engine::MOVE_PUSH) continue;
+                    if (f_model >= 0) {
+                        const char* m = progs.EdictFieldString(i, f_model);
+                        if (!(m && m[0] == '*')) continue;
+                    }
+                    float o[3];
+                    progs.EdictFieldVector(i, f_origin, o);
+                    float dx = o[0] - map.Models()[mi2].origin[0];
+                    float dy = o[1] - map.Models()[mi2].origin[1];
+                    float dz = o[2] - map.Models()[mi2].origin[2];
+                    Mat4 t = Mat4::Translate(Vec3{ dx, dy, dz });
+                    auto bgroups = zq::app::BuildSubmodelGroups(map, mi2);
+                    for (const auto& grp : bgroups) {
+                        if (grp.indices.empty()) continue;
+                        int ti2 = grp.texture_index;
+                        auto tt = rt_brush_tile.find({ mi2, ti2 });
+                        if (tt == rt_brush_tile.end()) continue;
+                        eb.AddMeshWithTile(grp.vertices.data(), grp.vertices.size(),
+                                           sizeof(zq::app::WorldVertex),
+                                           grp.indices.data(), grp.indices.size(),
+                                           tt->second, t.m);
+                    }
+                }
+            }
+return eb.Triangles();
+        };
+
+        if (!rt_static_done) {
+            // ---- FIRST BUILD: static world+brush BVH (built once) + atlas ----
+            for (const auto& grp : groups) {
+                if (grp.indices.empty()) continue;
+                int ti = grp.texture_index;
+                if (ti < 0 || ti >= (int)map.Textures().size()) continue;
+                auto rgba = zq::app::IndexedToRGBA(map.Textures()[ti], palette);
+                builder.AddMesh(grp.vertices.data(), grp.vertices.size(), sizeof(zq::app::WorldVertex),
+                                grp.indices.data(), grp.indices.size(), rgba.data(),
+                                map.Textures()[ti].width, map.Textures()[ti].height, nullptr);
+            }
+            for (int mi = 1; mi < (int)map.Models().size(); mi++) {
+                // Doors (brush submodels owned by MOVETYPE_PUSH edicts) are added
+                // to the DYNAMIC entity BVH each tick so they render at their
+                // current (open/closed) position. Exclude them from the static
+                // scene so there's no phantom closed-door geometry left behind;
+                // register their textures here so the dynamic rebuild can reuse
+                // a stable tile.
+                bool door = false;
+                if (progs.Loaded()) {
+                    int f_mi = progs.FindField("modelindex"), f_s = progs.FindField("solid"),
+                        f_mt = progs.FindField("movetype"), f_model = progs.FindField("model");
+                    for (int i = 1; i < 1024 && !door; i++) {
+                        if (progs.EdictFree(i)) continue;
+                        if ((int)progs.EdictFieldFloat(i, f_mi) != mi) continue;
+                        if ((int)progs.EdictFieldFloat(i, f_s) != zq::engine::SOLID_BSP) continue;
+                        if ((int)progs.EdictFieldFloat(i, f_mt) != zq::engine::MOVE_PUSH) continue;
+                        if (f_model >= 0) {
+                            const char* m = progs.EdictFieldString(i, f_model);
+                            if (!(m && m[0] == '*')) continue;
+                        }
+                        door = true;
+                    }
+                }
+                auto bgroups = zq::app::BuildSubmodelGroups(map, mi);
+                for (const auto& grp : bgroups) {
+                    if (grp.indices.empty()) continue;
+                    int ti = grp.texture_index;
+                    if (ti < 0 || ti >= (int)map.Textures().size()) continue;
+                    auto rgba = zq::app::IndexedToRGBA(map.Textures()[ti], palette);
+                    if (door) {
+                        uint32_t tile = builder.RegisterTexture(rgba.data(),
+                                        map.Textures()[ti].width, map.Textures()[ti].height);
+                        rt_brush_tile[{mi, ti}] = tile;
+                        continue;
+                    }
+                    builder.AddMesh(grp.vertices.data(), grp.vertices.size(), sizeof(zq::app::WorldVertex),
+                                    grp.indices.data(), grp.indices.size(), rgba.data(),
+                                    map.Textures()[ti].width, map.Textures()[ti].height, nullptr);
+                }
+            }
+            rt_static_tris = builder.Triangles(); // world + brush (tex 0..W)
+            // Register entity skins into the atlas so entity triangles can
+            // reference them; record each skin's tile index.
+            for (auto& e : entities) {
+                if (e.model_index < 0 || e.model_index >= (int)models.size()) continue;
+                LoadedModel* lm = &models[e.model_index];
+                if (!lm->mdl) continue;
+                auto key = std::make_pair(e.model_index, e.skin >= 0 ? e.skin : 0);
+                if (rt_skin_tile.count(key)) continue;
+                std::vector<uint8_t> skinRgba;
+                auto it = rt_skin_cache.find(key);
+                if (it != rt_skin_cache.end()) skinRgba = it->second;
+                else if (!lm->mdl->Skin(key.second).empty()) {
+                    skinRgba = zq::app::IndexedToRGBA(lm->mdl->Skin(key.second).data(), lm->mdl->Skin(key.second).size(), palette);
+                    rt_skin_cache[key] = skinRgba;
+                } else skinRgba.assign((size_t)lm->mdl->SkinWidth()*lm->mdl->SkinHeight()*4, 200);
+                uint32_t tile = builder.RegisterTexture(skinRgba.data(), lm->mdl->SkinWidth(), lm->mdl->SkinHeight());
+                rt_skin_tile[key] = tile;
+            }
+            rt_atlas = builder.AtlasRgba();
+            rt_tile_infos = builder.TileInfos();
+            rt_static_done = true;
+            rtW = (uint32_t)(vulkan.GetSwapchainWidth() * rt_scale);
+            rtH = (uint32_t)(vulkan.GetSwapchainHeight() * rt_scale);
+            if (rtW < 1) rtW = 1;
+            if (rtH < 1) rtH = 1;
+            if (!rt.BuildScene(rt_static_tris, rt_atlas, builder.AtlasWidth(), builder.AtlasHeight(),
+                               rt_tile_infos, rtW, rtH)) return false;
+            rt.UpdateEntities(build_entity_rt_tris());
+        } else {
+            // ---- REBUILD: only update the dynamic entity BVH ----
+            rt.UpdateEntities(build_entity_rt_tris());
+        }
+        // Install point lights from the progs `light` entities (spawned on the
+        // first game frame). Without these, an interior lit only by a uniform
+        // directional source reads as a flat gray wash.
+        std::vector<zq::render::RtLight> lights;
+        rt_lights_all.clear();
+        if (progs.Loaded()) {
+            int fcn = progs.FindField("classname"), fo = progs.FindField("origin");
+            int fli = progs.FindField("light"), fco = progs.FindField("color");
+            for (int i = 1; i < 1024; i++) {
+                if (progs.EdictFree(i)) continue;
+                const char* c = fcn >= 0 ? progs.EdictFieldString(i, fcn) : "";
+                if (!c || strncmp(c, "light", 5) != 0) continue;
+                zq::render::RtLight L;
+                if (fo >= 0) progs.EdictFieldVector(i, fo, L.pos);
+                float inten = fli >= 0 ? progs.EdictFieldFloat(i, fli) : 1.0f;
+                if (inten <= 0) inten = 1.0f;
+                if (fco >= 0) progs.EdictFieldVector(i, fco, L.color);
+                if (L.color[0] == 0 && L.color[1] == 0 && L.color[2] == 0) { L.color[0]=L.color[1]=L.color[2]=1; }
+                // Brighter lights with a moderate radius; the shader applies inverse-square
+                // falloff (atten ~ intensity / dl^2), so intensity needs to be high.
+                L.intensity = std::min(1.0f, 0.35f + inten * 0.006f);
+                L.radius = std::min(10000.0f, 2000.0f + inten * 15.0f);
+                rt_lights_all.push_back(L);
+            }
+        }
+        rt.SetLights(rt_lights_all);
+        return true;
+    };
+
     uint32_t last_ticks = SDL_GetTicks();
     int frame = 0;
+    // FPS counter: count frames in a rolling window, update the title ~2x/sec.
+    uint32_t fps_frames = 0;
+    uint32_t fps_start = SDL_GetTicks();
+    auto update_title_fps = [&]() {
+        fps_frames++;
+        uint32_t now = SDL_GetTicks();
+        float el = (float)(now - fps_start) / 1000.0f;
+        if (el >= 0.5f) {
+            char title[96];
+            std::snprintf(title, sizeof(title), "zquake  %.0f FPS", fps_frames / el);
+            SDL_SetWindowTitle(window, title);
+            fps_frames = 0;
+            fps_start = now;
+        }
+    };
 
     while (running && zq::engine::Host::Instance().GetState() != zq::engine::Host::State::Shutdown) {
         uint32_t now = SDL_GetTicks();
@@ -1274,7 +1497,38 @@ int main(int argc, char** argv) {
         // Rebuild the visible MDL list from the live progs entities (so
         // picked-up items disappear and monsters move to their origins).
         refresh_entities();
-        refresh_brush_submodels();
+refresh_brush_submodels();
+
+        // Rebuild the dynamic entity BVH once after each VM tick (entities were
+        // just refreshed above), gated on the version hash so we only pay the
+        // GPU sync when an entity actually moved or animated. Kept out of the
+        // render path so a rebuild never stalls the frame that presents it.
+        if (rt_built && rt_static_done) {
+            uint64_t v = entities.size();
+            for (auto& e : entities)
+                v = v*31 + (uint64_t)(int)(e.origin[0]*4) + (uint64_t)(int)(e.origin[1]*4)
+                    + (uint64_t)(int)(e.origin[2]*4) + (uint64_t)e.frame;
+            // Include door (MOVETYPE_PUSH brush) origins so the BVH rebuilds
+            // when a door slides open/closed, even if no MDL entity moved.
+            if (progs.Loaded()) {
+                int f_s = progs.FindField("solid"),
+                    f_mt = progs.FindField("movetype"), f_origin = progs.FindField("origin");
+                for (int i = 1; i < 1024; i++) {
+                    if (progs.EdictFree(i)) continue;
+                    if ((int)progs.EdictFieldFloat(i, f_s) != zq::engine::SOLID_BSP) continue;
+                    if ((int)progs.EdictFieldFloat(i, f_mt) != zq::engine::MOVE_PUSH) continue;
+                    float o[3]; progs.EdictFieldVector(i, f_origin, o);
+                    v = v*31 + (uint64_t)(int)(o[0]*4) + (uint64_t)(int)(o[1]*4) + (uint64_t)(int)(o[2]*4);
+                }
+            }
+            if (v != rt_entity_ver) {
+                rt_entity_ver = v;
+                uint32_t t0 = SDL_GetTicks();
+                rebuild_rt_scene();
+                if (frame % 60 == 0)
+                    std::printf("DIAG rebuild %dms frame=%d\\n", SDL_GetTicks() - t0, frame);
+            }
+        }
 
         // Camera: eye at pos, look along yaw/pitch
         float pitch_rad = DegToRad(player.pitch);
@@ -1333,6 +1587,54 @@ int main(int argc, char** argv) {
             } else {
                 std::printf("DIAG in-game offscreen render FAILED\n");
             }
+        }
+
+        if (rt_enabled) {
+            // Build the static scene once. Rebuilding every frame (buffers +
+            // storage image + atlas, each with a vkQueueWaitIdle GPU stall) made
+            // the RT path effectively hang. A single build then a per-frame
+            // dispatch + blit keeps it responsive.
+            if (!rt_built) {
+                rt_built = rebuild_rt_scene();
+                // `light` entities are spawned by the progs a frame or two in;
+                // retry until at least one exists (fallback key light otherwise).
+                if (rt_built && rt.LightCount() == 0 && frame < 40) rt_built = false;
+            }
+            // Install the lights nearest to the camera so the current room is
+            // actually lit (the scene may contain hundreds of lights).
+            if (rt_built && !rt_lights_all.empty()) {
+                int k = (int)std::min<size_t>(rt_lights_all.size(), 24);
+                // partial selection: nearest k to the eye (simple insertion sort)
+                std::vector<zq::render::RtLight> near(k);
+                for (int i = 0; i < k; i++) near[i] = rt_lights_all[i];
+                auto dist = [&](const zq::render::RtLight& L){
+                    float dx=L.pos[0]-eye.x, dy=L.pos[1]-eye.y, dz=L.pos[2]-eye.z;
+                    return dx*dx+dy*dy+dz*dz;
+                };
+                for (size_t i = k; i < rt_lights_all.size(); i++) {
+                    int worst = 0;
+                    for (int j = 1; j < k; j++) if (dist(near[j]) > dist(near[worst])) worst = j;
+                    if (dist(rt_lights_all[i]) < dist(near[worst])) near[worst] = rt_lights_all[i];
+                }
+                rt.SetLights(near);
+            }
+            if (!vulkan.BeginFrame(false)) {  // acquire + begin cmd buffer, no render pass yet
+                continue;
+            }
+            vulkan.SetCamera(proj.m, view.m);
+            rt.Dispatch(vulkan.GetActiveCommandBuffer(), proj.m, view.m,
+                        vulkan.GetSwapchainImageView(vulkan.GetCurrentImageIndex()),
+                        vulkan.GetSwapchainWidth(), vulkan.GetSwapchainHeight());
+            vulkan.EndFrame();
+            // The RT path shares a single storage image across frames; wait for
+            // this frame's GPU work to finish before the next frame writes it,
+            // otherwise two in-flight frames race on the same image (a race that
+            // corrupted the presented image and hung the GPU).
+            vulkan.WaitIdle();
+            SDL_Delay(1);
+            frame++;
+            update_title_fps();
+            continue;
         }
 
         if (!vulkan.BeginFrame()) {
@@ -1407,11 +1709,13 @@ int main(int argc, char** argv) {
 
         SDL_Delay(1);
         frame++;
+        update_title_fps();
     }
 
     SDL_StopTextInput();
     zq::engine::Host::Instance().Shutdown();
     pak.Close();
+    if (rt_enabled) rt.Shutdown();
     vulkan.Shutdown();
     SDL_DestroyWindow(window);
     SDL_Quit();

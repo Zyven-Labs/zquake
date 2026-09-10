@@ -15,6 +15,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/zquake_tests.dir/tests/core/move_test.cpp.o.d"
   "CMakeFiles/zquake_tests.dir/tests/core/progs_vm_test.cpp.o"
   "CMakeFiles/zquake_tests.dir/tests/core/progs_vm_test.cpp.o.d"
+  "CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o"
+  "CMakeFiles/zquake_tests.dir/tests/core/ray_scene_test.cpp.o.d"
   "CMakeFiles/zquake_tests.dir/tests/core/vm_test.cpp.o"
   "CMakeFiles/zquake_tests.dir/tests/core/vm_test.cpp.o.d"
   "CMakeFiles/zquake_tests.dir/tests/filesystem/fs_test.cpp.o"

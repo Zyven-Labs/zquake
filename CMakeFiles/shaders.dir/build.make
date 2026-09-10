@@ -71,37 +71,86 @@ CMakeFiles/shaders: shaders/spv/forward_fragment.spv
 CMakeFiles/shaders: shaders/spv/point_light.spv
 CMakeFiles/shaders: shaders/spv/sprite_vertex.spv
 CMakeFiles/shaders: shaders/spv/hud_vertex.spv
+CMakeFiles/shaders: shaders/spv/raytrace_compute.spv
+CMakeFiles/shaders: shaders/spv/blit_vertex.spv
+CMakeFiles/shaders: shaders/spv/blit_fragment.spv
+CMakeFiles/shaders: shaders/spv/bvh_morton_compute.spv
+CMakeFiles/shaders: shaders/spv/bvh_sort_compute.spv
+CMakeFiles/shaders: shaders/spv/bvh_build_compute.spv
+CMakeFiles/shaders: shaders/spv/bvh_aabb_compute.spv
+
+shaders/spv/blit_fragment.spv: shaders/blit_fragment.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Compiling blit_fragment.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=fragment -std=450core /home/rechenplan/Code/zyven/zquake/shaders/blit_fragment.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/blit_fragment.spv
+
+shaders/spv/blit_vertex.spv: shaders/blit_vertex.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Compiling blit_vertex.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=vertex -std=450core /home/rechenplan/Code/zyven/zquake/shaders/blit_vertex.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/blit_vertex.spv
+
+shaders/spv/bvh_aabb_compute.spv: shaders/bvh_aabb_compute.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Compiling bvh_aabb_compute.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=compute -std=450core /home/rechenplan/Code/zyven/zquake/shaders/bvh_aabb_compute.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/bvh_aabb_compute.spv
+
+shaders/spv/bvh_build_compute.spv: shaders/bvh_build_compute.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Compiling bvh_build_compute.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=compute -std=450core /home/rechenplan/Code/zyven/zquake/shaders/bvh_build_compute.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/bvh_build_compute.spv
+
+shaders/spv/bvh_morton_compute.spv: shaders/bvh_morton_compute.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Compiling bvh_morton_compute.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=compute -std=450core /home/rechenplan/Code/zyven/zquake/shaders/bvh_morton_compute.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/bvh_morton_compute.spv
+
+shaders/spv/bvh_sort_compute.spv: shaders/bvh_sort_compute.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Compiling bvh_sort_compute.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=compute -std=450core /home/rechenplan/Code/zyven/zquake/shaders/bvh_sort_compute.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/bvh_sort_compute.spv
 
 shaders/spv/forward_fragment.spv: shaders/forward_fragment.glsl
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Compiling forward_fragment.glsl to SPIR-V"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Compiling forward_fragment.glsl to SPIR-V"
 	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
 	/usr/bin/glslc -fshader-stage=fragment -std=450core /home/rechenplan/Code/zyven/zquake/shaders/forward_fragment.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/forward_fragment.spv
 
 shaders/spv/forward_vertex.spv: shaders/forward_vertex.glsl
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Compiling forward_vertex.glsl to SPIR-V"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Compiling forward_vertex.glsl to SPIR-V"
 	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
 	/usr/bin/glslc -fshader-stage=vertex -std=450core /home/rechenplan/Code/zyven/zquake/shaders/forward_vertex.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/forward_vertex.spv
 
 shaders/spv/hud_vertex.spv: shaders/hud_vertex.glsl
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Compiling hud_vertex.glsl to SPIR-V"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Compiling hud_vertex.glsl to SPIR-V"
 	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
 	/usr/bin/glslc -fshader-stage=vertex -std=450core /home/rechenplan/Code/zyven/zquake/shaders/hud_vertex.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/hud_vertex.spv
 
 shaders/spv/point_light.spv: shaders/point_light.glsl
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Compiling point_light.glsl to SPIR-V"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Compiling point_light.glsl to SPIR-V"
 	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
 	/usr/bin/glslc -fshader-stage=vertex -std=450core /home/rechenplan/Code/zyven/zquake/shaders/point_light.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/point_light.spv
 
+shaders/spv/raytrace_compute.spv: shaders/raytrace_compute.glsl
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Compiling raytrace_compute.glsl to SPIR-V"
+	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
+	/usr/bin/glslc -fshader-stage=compute -std=450core /home/rechenplan/Code/zyven/zquake/shaders/raytrace_compute.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/raytrace_compute.spv
+
 shaders/spv/sprite_vertex.spv: shaders/sprite_vertex.glsl
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Compiling sprite_vertex.glsl to SPIR-V"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --blue --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Compiling sprite_vertex.glsl to SPIR-V"
 	/usr/bin/cmake -E make_directory /home/rechenplan/Code/zyven/zquake/shaders/spv
 	/usr/bin/glslc -fshader-stage=vertex -std=450core /home/rechenplan/Code/zyven/zquake/shaders/sprite_vertex.glsl -o /home/rechenplan/Code/zyven/zquake/shaders/spv/sprite_vertex.spv
 
 shaders: CMakeFiles/shaders
+shaders: shaders/spv/blit_fragment.spv
+shaders: shaders/spv/blit_vertex.spv
+shaders: shaders/spv/bvh_aabb_compute.spv
+shaders: shaders/spv/bvh_build_compute.spv
+shaders: shaders/spv/bvh_morton_compute.spv
+shaders: shaders/spv/bvh_sort_compute.spv
 shaders: shaders/spv/forward_fragment.spv
 shaders: shaders/spv/forward_vertex.spv
 shaders: shaders/spv/hud_vertex.spv
 shaders: shaders/spv/point_light.spv
+shaders: shaders/spv/raytrace_compute.spv
 shaders: shaders/spv/sprite_vertex.spv
 shaders: CMakeFiles/shaders.dir/build.make
 .PHONY : shaders

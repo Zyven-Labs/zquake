@@ -97,19 +97,67 @@ CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/src/render/software_renderer.cpp -o CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.s
 
+CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o: CMakeFiles/zq_render.dir/flags.make
+CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o: src/render/ray_scene.cpp
+CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o: CMakeFiles/zq_render.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o -MF CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o.d -o CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o -c /home/rechenplan/Code/zyven/zquake/src/render/ray_scene.cpp
+
+CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/rechenplan/Code/zyven/zquake/src/render/ray_scene.cpp > CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.i
+
+CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/src/render/ray_scene.cpp -o CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.s
+
+CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o: CMakeFiles/zq_render.dir/flags.make
+CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o: src/render/raytracer.cpp
+CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o: CMakeFiles/zq_render.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o -MF CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o.d -o CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o -c /home/rechenplan/Code/zyven/zquake/src/render/raytracer.cpp
+
+CMakeFiles/zq_render.dir/src/render/raytracer.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/zq_render.dir/src/render/raytracer.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/rechenplan/Code/zyven/zquake/src/render/raytracer.cpp > CMakeFiles/zq_render.dir/src/render/raytracer.cpp.i
+
+CMakeFiles/zq_render.dir/src/render/raytracer.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zq_render.dir/src/render/raytracer.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/src/render/raytracer.cpp -o CMakeFiles/zq_render.dir/src/render/raytracer.cpp.s
+
+CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o: CMakeFiles/zq_render.dir/flags.make
+CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o: src/app/rt_scene.cpp
+CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o: CMakeFiles/zq_render.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o -MF CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o.d -o CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o -c /home/rechenplan/Code/zyven/zquake/src/app/rt_scene.cpp
+
+CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/rechenplan/Code/zyven/zquake/src/app/rt_scene.cpp > CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.i
+
+CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/rechenplan/Code/zyven/zquake/src/app/rt_scene.cpp -o CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.s
+
 # Object files for target zq_render
 zq_render_OBJECTS = \
 "CMakeFiles/zq_render.dir/src/render/font8x8.cpp.o" \
-"CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.o"
+"CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.o" \
+"CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o" \
+"CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o" \
+"CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o"
 
 # External object files for target zq_render
 zq_render_EXTERNAL_OBJECTS =
 
 libzq_render.a: CMakeFiles/zq_render.dir/src/render/font8x8.cpp.o
 libzq_render.a: CMakeFiles/zq_render.dir/src/render/software_renderer.cpp.o
+libzq_render.a: CMakeFiles/zq_render.dir/src/render/ray_scene.cpp.o
+libzq_render.a: CMakeFiles/zq_render.dir/src/render/raytracer.cpp.o
+libzq_render.a: CMakeFiles/zq_render.dir/src/app/rt_scene.cpp.o
 libzq_render.a: CMakeFiles/zq_render.dir/build.make
 libzq_render.a: CMakeFiles/zq_render.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX static library libzq_render.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/rechenplan/Code/zyven/zquake/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX static library libzq_render.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/zq_render.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/zq_render.dir/link.txt --verbose=$(VERBOSE)
 

@@ -84,6 +84,7 @@ set(CMAKE_DEPEND_INFO_FILES
   "CMakeFiles/zquake_realdata.dir/DependInfo.cmake"
   "CMakeFiles/zquake_inspect.dir/DependInfo.cmake"
   "CMakeFiles/zquake_spawnview.dir/DependInfo.cmake"
+  "CMakeFiles/zquake_raytrace.dir/DependInfo.cmake"
   "_deps/catch2-build/src/CMakeFiles/Catch2.dir/DependInfo.cmake"
   "_deps/catch2-build/src/CMakeFiles/Catch2WithMain.dir/DependInfo.cmake"
   )
