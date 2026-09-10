@@ -295,7 +295,7 @@ vec3 directLight(vec3 P, vec3 N, int isEnt, int srcIdx) {
             int skipE = (isEnt != 0) ? srcIdx : -1;
             sh = traceShadow(spo, L, dl - 1e-2, skipW, skipE) ? 0.15 : 1.0;
         }
-        light += pl.color.rgb * atten * ndl * sh;
+        light += pl.color.rgb * (atten * ndl * sh + 0.1);
     }
     return light;
 }
@@ -303,7 +303,7 @@ vec3 directLight(vec3 P, vec3 N, int isEnt, int srcIdx) {
 // Multi-bounce shading: traces the ray, and up to `BOUNCES` specular
 // reflections, accumulating indirect light so lit areas bleed into shadow.
 vec3 rayShade(vec3 o, vec3 d) {
-    const int BOUNCES = 4;
+    const int BOUNCES = 2;
     vec3 color = vec3(0.0);
     vec3 throughput = vec3(1.0);
     vec3 ro = o, rd = d;
@@ -313,7 +313,8 @@ vec3 rayShade(vec3 o, vec3 d) {
         Tri hit;
         float u, v, t;
         int isEnt, srcIdx;
-        traceAny(ro, rd, 1e30, hit, u, v, t, isEnt, srcIdx);
+        if (!traceAny(ro, rd, 1e30, hit, u, v, t, isEnt, srcIdx))
+          break;
         vec3 P = ro + rd * t;
         vec3 N = triNormal(hit);
         vec2 uv = interpolateUV(hit, u, v);
