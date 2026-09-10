@@ -4,13 +4,12 @@ A modern Quake1 source port built with SDL2, Vulkan, and C++20.
 
 ## Features
 
+- **GPU raytracer** with BVH acceleration and multi-bounce global illumination via compute shaders
 - **Vulkan renderer** with modern graphics pipeline
 - **SDL2** for windowing, input, and audio
 - **Fully deterministic** fixed-point math (24.8 format)
 - **QuakeC VM** for game logic and total conversions
 - **Bit-exact replication** across platforms (x86, ARM)
-- **Multi-threaded renderer** (physics stays single-threaded for determinism)
-- **Enhanced audio** (16-bit stereo, 256 channels, streaming)
 
 ## Building
 
@@ -52,13 +51,41 @@ zquake/
 │   ├── filesystem/    # Virtual FS, PAK archives
 │   ├── subsystems/    # Network protocol, reliable/unreliable
 │   ├── vulkan/        # Vulkan renderer pipeline
+│   ├── render/        # Software renderer, GPU raytracer, BVH
 │   ├── engine/        # Console, CVar, entity, world, game
 │   ├── vm/            # QuakeC VM + builtins
-│   └── app/           # Entry point, main loop
+│   └── app/           # Entry point, main loop, world builder
 ├── include/           # Public interface headers
-├── tests/             # Catch2 test suite
+├── tests/             # Catch2 unit tests + diagnostic executables
 ├── shaders/           # GLSL → SPIR-V build-time compilation
-└── tools/             # Dev tools (QCC, etc.)
+└── id1/               # Game data (pak0.pak)
+```
+
+## Tests
+
+The project uses Catch2 for unit testing and includes several standalone diagnostic executables:
+
+```bash
+# Run unit tests
+./zquake_tests
+
+# Vulkan renderer smoke test
+./zquake_smoke
+
+# GPU raytracer regression test
+./zquake_raytrace
+
+# Inspect real map models/faces
+./zquake_inspect
+
+# Render the spawn camera view to a file
+./zquake_spawnview
+
+# Diagnostics against real pak0.pak
+./zquake_realdata
+
+# Orientation / mouse-mapping render test
+./zquake_orientation
 ```
 
 ## Determinism
