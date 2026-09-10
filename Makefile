@@ -609,6 +609,30 @@ src/core/memory/allocator.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_core.dir/build.make CMakeFiles/zq_core.dir/src/core/memory/allocator.cpp.s
 .PHONY : src/core/memory/allocator.cpp.s
 
+src/engine/area_nodes.o: src/engine/area_nodes.cpp.o
+.PHONY : src/engine/area_nodes.o
+
+# target to build an object file
+src/engine/area_nodes.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/area_nodes.cpp.o
+.PHONY : src/engine/area_nodes.cpp.o
+
+src/engine/area_nodes.i: src/engine/area_nodes.cpp.i
+.PHONY : src/engine/area_nodes.i
+
+# target to preprocess a source file
+src/engine/area_nodes.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/area_nodes.cpp.i
+.PHONY : src/engine/area_nodes.cpp.i
+
+src/engine/area_nodes.s: src/engine/area_nodes.cpp.s
+.PHONY : src/engine/area_nodes.s
+
+# target to generate assembly for a file
+src/engine/area_nodes.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/area_nodes.cpp.s
+.PHONY : src/engine/area_nodes.cpp.s
+
 src/engine/bsp.o: src/engine/bsp.cpp.o
 .PHONY : src/engine/bsp.o
 
@@ -896,6 +920,30 @@ src/engine/model.s: src/engine/model.cpp.s
 src/engine/model.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/model.cpp.s
 .PHONY : src/engine/model.cpp.s
+
+src/engine/monster_move.o: src/engine/monster_move.cpp.o
+.PHONY : src/engine/monster_move.o
+
+# target to build an object file
+src/engine/monster_move.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/monster_move.cpp.o
+.PHONY : src/engine/monster_move.cpp.o
+
+src/engine/monster_move.i: src/engine/monster_move.cpp.i
+.PHONY : src/engine/monster_move.i
+
+# target to preprocess a source file
+src/engine/monster_move.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/monster_move.cpp.i
+.PHONY : src/engine/monster_move.cpp.i
+
+src/engine/monster_move.s: src/engine/monster_move.cpp.s
+.PHONY : src/engine/monster_move.s
+
+# target to generate assembly for a file
+src/engine/monster_move.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/zq_engine.dir/build.make CMakeFiles/zq_engine.dir/src/engine/monster_move.cpp.s
+.PHONY : src/engine/monster_move.cpp.s
 
 src/engine/move.o: src/engine/move.cpp.o
 .PHONY : src/engine/move.o
@@ -2154,6 +2202,9 @@ help:
 	@echo "... src/core/memory/allocator.o"
 	@echo "... src/core/memory/allocator.i"
 	@echo "... src/core/memory/allocator.s"
+	@echo "... src/engine/area_nodes.o"
+	@echo "... src/engine/area_nodes.i"
+	@echo "... src/engine/area_nodes.s"
 	@echo "... src/engine/bsp.o"
 	@echo "... src/engine/bsp.i"
 	@echo "... src/engine/bsp.s"
@@ -2190,6 +2241,9 @@ help:
 	@echo "... src/engine/model.o"
 	@echo "... src/engine/model.i"
 	@echo "... src/engine/model.s"
+	@echo "... src/engine/monster_move.o"
+	@echo "... src/engine/monster_move.i"
+	@echo "... src/engine/monster_move.s"
 	@echo "... src/engine/move.o"
 	@echo "... src/engine/move.i"
 	@echo "... src/engine/move.s"

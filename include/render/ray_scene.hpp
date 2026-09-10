@@ -24,6 +24,14 @@ struct RtTriangle {
     float uv2[2] = {0, 0};
     std::uint32_t tex = 0;
     std::uint32_t light = 0;
+    std::uint32_t tag = 0;   // overlay flags: 1 = first-person viewmodel
+    // Explicit padding: GLSL std430 aligns the trailing vec4 vectors to 16, so
+    // the GPU element is 96 bytes. Keep the CPU struct at exactly 96 bytes too
+    // (C++ would otherwise pack it to 88) or every array element after the
+    // first is misread.
+    std::uint32_t _pad = 0;
+    std::uint32_t _pad2 = 0;
+    std::uint32_t _pad3 = 0;
 };
 
 // A point light placed at a map `light` entity's origin.

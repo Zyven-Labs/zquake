@@ -7,6 +7,7 @@
 #include "engine/mdl_model.hpp"
 #include "engine/move.hpp"
 #include "engine/gameframe.hpp"
+#include "engine/particle.hpp"
 #include "vulkan/vulkan_api.hpp"
 #include "filesystem/pak_archive.hpp"
 #include "core/math/mathf.hpp"
@@ -195,10 +196,11 @@ static void UpdateGameFrame(Player& p, float dt, const zq::engine::BSPMap& map,
     SetGameTraceContext(&map, solids.data(), (int)solids.size(), client_edict);
 
     F.Populate(progs);
-    // Pre-sync the client's origin/velocity into its edict BEFORE the game
-    // frame runs, so monsters/AI that move this frame collide against the
-    // player where they actually are (not last frame's spot), which stops
-    // monsters from piling into/through the player.
+
+    // Pre-sync the player's live state into its edict BEFORE the frame: the
+    // entity system (StartFrame, this frame's monster AI) reads the client
+    // entity like any other, so its position/velocity/flags/view angles must
+    // be current before RunGameFrame dispatches it.
     if (F.origin >= 0) {
         float o[3] = { p.pos.x, p.pos.y, p.pos.z };
         progs.SetEdictFieldVector(client_edict, F.origin, o);
@@ -206,95 +208,56 @@ static void UpdateGameFrame(Player& p, float dt, const zq::engine::BSPMap& map,
     if (F.velocity >= 0) {
         float v[3] = { p.vel.x, p.vel.y, p.vel.z };
         progs.SetEdictFieldVector(client_edict, F.velocity, v);
-    }
-
-    // 1) StartFrame + entity thinks/physics (SV_Physics; client excluded)
-    RunGameFrame(progs, map, dt, solids.data(), (int)solids.size(), client_edict);
-
-    // 2) sync client edict: origin, velocity, view angles, buttons
-    if (F.origin >= 0) {
-        float o[3] = { p.pos.x, p.pos.y, p.pos.z };
-        progs.SetEdictFieldVector(client_edict, F.origin, o);
     }
     if (F.v_angle >= 0) {
         float a[3] = { p.pitch, p.yaw, 0 };
         progs.SetEdictFieldVector(client_edict, F.v_angle, a);
     }
-    if (F.angle >= 0) {
-        float a[3] = { p.pitch, p.yaw, 0 };
-        progs.SetEdictFieldVector(client_edict, F.angle, a);
-    }
-    progs.SetSelfEdict(client_edict);
-    progs.SetOtherEdict(0);
-    if (F.button0 >= 0)
-        progs.EdictFieldFloat(client_edict, F.button0) =
-            (Input::IsKeyDown(Key::MOUSE1) || Input::IsKeyDown(Key::LCTRL)) ? 1.0f : 0.0f;
-    if (F.button2 >= 0)
-        progs.EdictFieldFloat(client_edict, F.button2) = Input::IsKeyDown(Key::SPACE) ? 1.0f : 0.0f;
-    if (F.button3 >= 0)
-        progs.EdictFieldFloat(client_edict, F.button3) = Input::IsKeyDown(Key::LSHIFT) ? 1.0f : 0.0f;
-
-    // 3) PlayerPreThink: reads buttons (weapon fire, jump via button2)
-    int pre = progs.FunctionIndex("PlayerPreThink");
-    if (pre > 0) progs.ExecuteProgram(pre);
-
-    // 4) engine movement (faithful SV_WalkMove against world + entities)
-    PlayerPhys phys;
-    phys.origin[0] = p.pos.x; phys.origin[1] = p.pos.y; phys.origin[2] = p.pos.z;
-    phys.velocity[0] = p.vel.x; phys.velocity[1] = p.vel.y; phys.velocity[2] = p.vel.z;
-    phys.angles[0] = p.pitch;
-    phys.angles[1] = p.yaw;
-    phys.angles[2] = 0;
-    phys.onground = p.on_ground;
-
-    PlayerCmd cmd;
-    cmd.forwardmove = 0;
-    if (Input::IsKeyDown(Key::WKEY)) cmd.forwardmove += 320;
-    if (Input::IsKeyDown(Key::SKEY)) cmd.forwardmove -= 320;
-    cmd.sidemove = 0;
-    if (Input::IsKeyDown(Key::DKEY)) cmd.sidemove += 320;
-    if (Input::IsKeyDown(Key::AKEY)) cmd.sidemove -= 320;
-    cmd.upmove = 0;
-    cmd.jump = Input::IsKeyDown(Key::SPACE); // engine-side jump (270 in RunPlayerMove)
-
-    RunPlayerMove(map, phys, cmd, dt, movevars, solids.data(), (int)solids.size(),
-                  client_edict);
-
-    p.pos.x = phys.origin[0]; p.pos.y = phys.origin[1]; p.pos.z = phys.origin[2];
-    p.vel.x = phys.velocity[0]; p.vel.y = phys.velocity[1]; p.vel.z = phys.velocity[2];
-    p.on_ground = phys.onground;
-
-    // synced velocity/onground back into the client edict
-    if (F.velocity >= 0) {
-        float v[3] = { p.vel.x, p.vel.y, p.vel.z };
-        progs.SetEdictFieldVector(client_edict, F.velocity, v);
-    }
-    if (F.origin >= 0) {
-        float o[3] = { p.pos.x, p.pos.y, p.pos.z };
-        progs.SetEdictFieldVector(client_edict, F.origin, o);
-    }
-    if (F.flags >= 0) {
-        int flags = (int)progs.EdictFieldFloat(client_edict, F.flags);
-        flags |= 8; // FL_CLIENT
-        if (p.on_ground) flags |= FL_ONGROUND; else flags &= ~FL_ONGROUND;
-        progs.EdictFieldFloat(client_edict, F.flags) = (float)flags;
-    }
-
-    // 5) PlayerPostThink
-    progs.SetSelfEdict(client_edict);
-    int post = progs.FunctionIndex("PlayerPostThink");
-    if (post > 0) progs.ExecuteProgram(post);
-
-    // 6) touch detection (item/weapon pickup). The SP PlayerPreThink rewrites
-    // the client's flags dropping FL_CLIENT, which the item touch functions
-    // gate on — restore it here so pickups actually fire.
     if (F.flags >= 0) {
         int flags = (int)progs.EdictFieldFloat(client_edict, F.flags);
         flags |= 8; // FL_CLIENT
         if (p.on_ground) flags |= FL_ONGROUND;
+        else flags &= ~FL_ONGROUND;
         progs.EdictFieldFloat(client_edict, F.flags) = (float)flags;
     }
-    CheckTouch(progs, client_edict, solids.data(), (int)solids.size());
+
+    // 1) StartFrame + full SV_Physics dispatch. The client edict is now a
+    // first-class entity, processed first like Quake (WinQuake
+    // SV_Physics_Client): usercmd -> edict, PlayerPreThink, walk physics,
+    // re-link with touch (item/trigger pickup), PlayerPostThink all run
+    // inside the server frame against the frame's solid list.
+    ClientPhysics cin;
+    cin.forwardmove = 0;
+    if (Input::IsKeyDown(Key::WKEY)) cin.forwardmove += 320;
+    if (Input::IsKeyDown(Key::SKEY)) cin.forwardmove -= 320;
+    cin.sidemove = 0;
+    if (Input::IsKeyDown(Key::DKEY)) cin.sidemove += 320;
+    if (Input::IsKeyDown(Key::AKEY)) cin.sidemove -= 320;
+    cin.upmove = 0;
+    cin.jump = Input::IsKeyDown(Key::SPACE); // engine-side jump (270 in RunPlayerMove)
+    cin.button0 = Input::IsKeyDown(Key::MOUSE1) || Input::IsKeyDown(Key::LCTRL);
+    cin.button2 = Input::IsKeyDown(Key::SPACE);
+    cin.button3 = Input::IsKeyDown(Key::LSHIFT);
+    cin.impulse = 0;
+    if (Input::WasKeyPressed(Key::NUM1)) cin.impulse = 1;
+    else if (Input::WasKeyPressed(Key::NUM2)) cin.impulse = 2;
+    else if (Input::WasKeyPressed(Key::NUM3)) cin.impulse = 3;
+    else if (Input::WasKeyPressed(Key::NUM4)) cin.impulse = 4;
+    else if (Input::WasKeyPressed(Key::NUM5)) cin.impulse = 5;
+    else if (Input::WasKeyPressed(Key::NUM6)) cin.impulse = 6;
+    else if (Input::WasKeyPressed(Key::NUM7)) cin.impulse = 7;
+    else if (Input::WasKeyPressed(Key::NUM8)) cin.impulse = 8;
+    cin.move_vars = movevars;
+
+    RunGameFrame(progs, map, dt, solids.data(), (int)solids.size(), client_edict, &cin);
+
+    // 2) read the player back (origin/velocity/onground refreshed by the
+    // client physics inside RunGameFrame; look angles are untouched by the
+    // server, exactly like Quake where the client velocity/origin are the
+    // only things the server owns).
+    p.pos.x = cin.out_origin[0]; p.pos.y = cin.out_origin[1]; p.pos.z = cin.out_origin[2];
+    p.vel.x = cin.out_velocity[0]; p.vel.y = cin.out_velocity[1]; p.vel.z = cin.out_velocity[2];
+    p.on_ground = cin.out_onground;
 }
 
 
@@ -370,6 +333,7 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return 1;
     }
+    zq::engine::InitAreaNodes(map);   // area-node tree (SV_ClearWorld)
 
     // Player start. FindSpawnPoint guarantees a point that is inside the
     // level geometry (nudging embedded starts up, falling back to a point
@@ -451,6 +415,13 @@ int main(int argc, char** argv) {
     // spawn the map entities. This is the authoritative source of the
     // world's entity layout (ED_LoadFromFile).
     zq::vm::ProgVM progs;
+    // First-person viewmodel + combat feedback state (game thread).
+    int vm_weaponmodel_ofs = 0;   // client .weaponmodel string field
+    int vm_weapon_ofs = 0;        // client .weapon item bit
+    int vm_weaponframe_ofs = 0;   // client .weaponframe
+    int vm_effects_ofs = 0;       // client .effects (EF_MUZZLEFLASH bit)
+    int vm_health_ofs = 0;        // client .health
+    float prev_health = 100.0f;   // last read .health (for pain flash)
     {
         std::vector<uint8_t> progs_data;
         bool have_progs = false;
@@ -571,6 +542,34 @@ int main(int argc, char** argv) {
             if (f_flags >= 0)
                 progs.EdictFieldFloat(CLIENT, f_flags) =
                     (float)((int)progs.EdictFieldFloat(CLIENT, f_flags) | 8);
+            // Starter loadout: grant the shotgun + shells so the player can
+            // shoot immediately (author's choice; the engine otherwise stays
+            // authentic SP where you start with just the axe).
+            int f_items = progs.FindField("items");
+            if (f_items >= 0) {
+                int items = (int)progs.EdictFieldFloat(CLIENT, f_items);
+                progs.EdictFieldFloat(CLIENT, f_items) = (float)(items | (1 /*IT_SHOTGUN*/ | 4096 /*IT_AXE*/));
+            }
+            int f_shells = progs.FindField("ammo_shells");
+            if (f_shells >= 0)
+                progs.EdictFieldFloat(CLIENT, f_shells) = 25.0f;
+            int f_weapon = progs.FindField("weapon");
+            if (f_weapon >= 0)
+                progs.EdictFieldFloat(CLIENT, f_weapon) = (float)(1 /*IT_SHOTGUN*/);
+            // Re-run the progs' own current-weapon setup so weaponmodel /
+            // currentammo / weaponframe agree with the shotgun we just granted.
+            int f_wsca = progs.FunctionIndex("W_SetCurrentAmmo");
+            if (f_wsca > 0) {
+                progs.SetSelfEdict(CLIENT);
+                progs.ExecuteProgram(f_wsca);
+            }
+            // Cache client fields used by the viewmodel / muzzle-flash paths.
+            vm_weaponmodel_ofs = progs.FindField("weaponmodel");
+            vm_weapon_ofs = progs.FindField("weapon");
+            vm_weaponframe_ofs = progs.FindField("weaponframe");
+            vm_effects_ofs = progs.FindField("effects");
+            vm_health_ofs = progs.FindField("health");
+            if (f_health >= 0) prev_health = progs.EdictFieldFloat(CLIENT, f_health);
             zq::log::Info("QuakeC VM: progs.dat loaded, map entities spawned");
         } else {
             zq::log::Warn("progs.dat not found - entity spawn via QuakeC disabled");
@@ -638,6 +637,9 @@ int main(int argc, char** argv) {
     // frame, so every monster of a model renders that same pose (e.g. all idle).
     std::map<int, zq::vk::VulkanBuffer*> mdl_ent_vbuf;
     std::map<int, int> mdl_ent_frame;
+    // Dedicated VB for the first-person viewmodel (drawn camera-attached).
+    zq::vk::VulkanBuffer* mdl_vm_vbuf = nullptr;
+    int mdl_vm_frame = -1;
 
     // Build a frame's vertex data (positions + uv) from a loaded MDL. MDL
     // topology is identical across frames, so only this re-runs when the
@@ -783,6 +785,17 @@ int main(int argc, char** argv) {
         std::snprintf(nb, sizeof(nb), "model entities: %zu", entities.size());
         zq::log::Info(nb);
     }
+
+    // Eager-load the first-person weapon (view) models so their skins are in the
+    // RT atlas when the first scene build runs. load_model deduplicates by path
+    // so re-calling later for the same weapon costs nothing.
+    static const char* const kViewModelPaths[] = {
+        "progs/v_axe.mdl",   "progs/v_shot.mdl",   "progs/v_shot2.mdl",
+        "progs/v_nail.mdl",  "progs/v_nail2.mdl",  "progs/v_rock.mdl",
+        "progs/v_rock2.mdl", "progs/v_light.mdl"
+    };
+    std::map<std::string, int> vm_name_to_mi;
+    for (auto p : kViewModelPaths) vm_name_to_mi[p] = load_model(p);
 
     // Brush submodels (doors, breaks, item/ammo boxes, etc.) are NOT part of
     // the static world mesh; they are drawn as separate drawables that are
@@ -1145,6 +1158,33 @@ int main(int argc, char** argv) {
     // ---- Ray-traced path (ZQ_RT=1): a compute-kernel renderer ----
     const bool rt_enabled = getenv("ZQ_RT") != nullptr;
     const float rt_scale = 0.75f; // internal render resolution scale (blit upscales)
+
+    // Immutable model-space viewmodel base mesh + atlas tile. The render thread
+    // rebuilds the gun triangles + BVH from this every frame using the current
+    // vm matrix (cheap: one small model).
+    struct GunMesh {
+        int model_index = -1;
+        int frame = 0;
+        std::vector<zq::app::WorldVertex> verts;
+        std::vector<uint32_t> ids;
+        std::uint32_t tile = 0xFFFFFFFFu;
+    };
+
+    // ---- First-person viewmodel + combat feedback state (game thread) ----
+    int vm_viewmodel_mi = -1;     // index into `models` of the v_* view model
+    int vm_viewmodel_frame = 0;   // .weaponframe -> mdl frame
+    float vm_model_mat[16] = {0}; // viewmodel model-space->world matrix (per tick)
+    GunMesh vm_gun_mesh;          // cached viewmodel base mesh (refreshed per model)
+    float vm_health_store = 100.0f; // last read .health (sent to blit HUD)
+    float muzzle_flash_timer = 0; // seconds of dynamic-light flash remaining
+    float muzzle_pos[3] = {0,0,0}; // world-space barrel position (populated per-tick)
+    float eye_pos[3] = {0,0,28};  // camera eye origin (per tick)
+    float eye_f[3] = {1,0,0};     // camera forward / right / up basis (per tick)
+    float eye_r[3] = {0,-1,0};
+    float eye_u[3] = {0,0,1};
+    float pain_flash_timer = 0;   // red-screen flash seconds remaining
+    std::uint32_t rt_muzzle_tile = 0xFFFFFFFFu; // atlas tile for the flash glow
+    std::uint32_t rt_particle_tile = 0xFFFFFFFFu; // atlas tile for particles
     zq::render::RayTracer rt;
     if (rt_enabled) {
         if (!rt.Initialize(vulkan.GetPhysicalDevice(), vulkan.GetDevice(),
@@ -1251,6 +1291,47 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            // ---- Emissive glow quads: muzzle flash + hit particles + health bar.
+            //      Camera-facing billboards, textured with the soft-dot tiles.
+if (rt_particle_tile != 0xFFFFFFFFu) {
+                // Build a camera-facing quad in a helper-less inline block: add
+                // 4 verts (pos,uv) + 2 tris, then AddMeshWithTile.
+                auto addGlowQuad = [&](const float c[3],
+                                       const float basisR[3], const float basisU[3],
+                                       float halfR, float halfU, std::uint32_t tile) {
+                    zq::app::WorldVertex q[4];
+                    for (int k = 0; k < 4; k++) {
+                        q[k].pos[0] = c[0]; q[k].pos[1] = c[1]; q[k].pos[2] = c[2];
+                        q[k].uv[0] = (k == 1 || k == 2) ? 1.0f : 0.0f;
+                        q[k].uv[1] = (k >= 2) ? 1.0f : 0.0f;
+                        q[k].normal[0] = 0; q[k].normal[1] = 0; q[k].normal[2] = 1;
+                        q[k].lmuv[0] = 0.5f; q[k].lmuv[1] = 0.5f; q[k].lmuv[2] = 0;
+                    }
+                    // corners: 0 = -r -u, 1 = +r -u, 2 = +r +u, 3 = -r +u
+                    float dx0 = -basisR[0] * halfR, dy0 = -basisR[1] * halfR, dz0 = -basisR[2] * halfR;
+                    float dx1 = +basisR[0] * halfR, dy1 = +basisR[1] * halfR, dz1 = +basisR[2] * halfR;
+                    float du0 = -basisU[0] * halfU, dv0 = -basisU[1] * halfU, dw0 = -basisU[2] * halfU;
+                    float du1 = +basisU[0] * halfU, dv1 = +basisU[1] * halfU, dw1 = +basisU[2] * halfU;
+                    q[0].pos[0] += dx0 + du0; q[0].pos[1] += dy0 + dv0; q[0].pos[2] += dz0 + dw0;
+                    q[1].pos[0] += dx1 + du0; q[1].pos[1] += dy1 + dv0; q[1].pos[2] += dz1 + dw0;
+                    q[2].pos[0] += dx1 + du1; q[2].pos[1] += dy1 + dv1; q[2].pos[2] += dz1 + dw1;
+                    q[3].pos[0] += dx0 + du1; q[3].pos[1] += dy0 + dv1; q[3].pos[2] += dz0 + dw1;
+                    const std::uint32_t ids[6] = { 0, 1, 2, 0, 2, 3 };
+                    eb.AddMeshWithTile(q, 4, sizeof(zq::app::WorldVertex), ids, 6, tile, nullptr, true);
+                };
+                // Muzzle flash: bright orange glow that shrinks with the timer.
+                if (muzzle_flash_timer > 0.0f) {
+                    float t = muzzle_flash_timer / 0.09f;
+                    float half = 2.0f + 4.0f * t;
+                    addGlowQuad(muzzle_pos, eye_r, eye_u, half, half, rt_muzzle_tile);
+                }
+                // Hit-effect particles (blood/sparks/shells): soft white dots.
+                auto parts = zq::engine::ParticleSystem::Snapshot();
+                for (auto& p : parts) {
+                    float half = 0.8f + (float)p.size * 0.5f;
+                    addGlowQuad(p.pos, eye_r, eye_u, half, half, rt_particle_tile);
+                }
+            }
 return eb.Triangles();
         };
 
@@ -1324,6 +1405,50 @@ return eb.Triangles();
                 uint32_t tile = builder.RegisterTexture(skinRgba.data(), lm->mdl->SkinWidth(), lm->mdl->SkinHeight());
                 rt_skin_tile[key] = tile;
             }
+            // The first-person viewmodels are preloaded but are NOT spawned
+            // entities, so they never got a skin tile above. Register skin 0 for
+            // any loaded MDL still missing one (cheap; the atlas just grows).
+            for (int mi = 0; mi < (int)models.size(); mi++) {
+                const LoadedModel& lm = models[mi];
+                if (!lm.mdl) continue;
+                if (rt_skin_tile.count({ mi, 0 })) continue;
+                std::vector<uint8_t> skinRgba;
+                auto it = rt_skin_cache.find({ mi, 0 });
+                if (it != rt_skin_cache.end()) skinRgba = it->second;
+                else if (!lm.mdl->Skin(0).empty()) {
+                    skinRgba = zq::app::IndexedToRGBA(lm.mdl->Skin(0).data(), lm.mdl->Skin(0).size(), palette);
+                    rt_skin_cache[{ mi, 0 }] = skinRgba;
+                } else skinRgba.assign((size_t)lm.mdl->SkinWidth()*lm.mdl->SkinHeight()*4, 200);
+                rt_skin_tile[{ mi, 0 }] = builder.RegisterTexture(skinRgba.data(), lm.mdl->SkinWidth(), lm.mdl->SkinHeight());
+            }
+
+            // Register special-purpose emissive tiles: a white soft dot for
+            // particles and an orange radial for the muzzle flash glow.
+            {
+                std::vector<uint8_t> dot(64 * 64 * 4);
+                for (int y = 0; y < 64; y++)
+                    for (int x = 0; x < 64; x++) {
+                        float dx = (x + 0.5f - 32.0f) / 32.0f;
+                        float dy = (y + 0.5f - 32.0f) / 32.0f;
+                        float r = std::sqrt(dx*dx + dy*dy);
+                        uint8_t a = (uint8_t)(std::max(0.0f, 1.0f - r) * 255.0f);
+                        uint8_t* p = &dot[(y * 64 + x) * 4];
+                        p[0] = 200; p[1] = 200; p[2] = 200; p[3] = a;
+                    }
+                rt_particle_tile = builder.RegisterTexture(dot.data(), 64, 64);
+                // Orange radial for the muzzle flash glow
+                for (int y = 0; y < 64; y++)
+                    for (int x = 0; x < 64; x++) {
+                        float dx = (x + 0.5f - 32.0f) / 32.0f;
+                        float dy = (y + 0.5f - 32.0f) / 32.0f;
+                        float r = std::sqrt(dx*dx + dy*dy);
+                        uint8_t a = (uint8_t)(std::max(0.0f, 1.0f - r) * 255.0f);
+                        uint8_t* p = &dot[(y * 64 + x) * 4];
+                        p[0] = 255; p[1] = 140; p[2] = 46; p[3] = a;
+                    }
+                rt_muzzle_tile = builder.RegisterTexture(dot.data(), 64, 64);
+            }
+
             rt_atlas = builder.AtlasRgba();
             rt_tile_infos = builder.TileInfos();
             rt_static_done = true;
@@ -1352,7 +1477,23 @@ return eb.Triangles();
     // thread uploads it to the GPU on its first frame.
     swap_w = vulkan.GetSwapchainWidth();
     swap_h = vulkan.GetSwapchainHeight();
-    if (rt_enabled) rebuild_rt_scene();
+    if (rt_enabled) {
+        // Preload the stock first-person viewmodels up front. They are NOT
+        // spawned entities, so the static-build skin pass (which runs now, and
+        // freezes the atlas) would otherwise miss them and the gun overlay would
+        // have no skin tile.
+        const char* stock_vm[] = {
+            "progs/v_shot.mdl", "progs/v_shot2.mdl", "progs/v_nail.mdl", "progs/v_nail2.mdl",
+            "progs/v_rock.mdl", "progs/v_rock2.mdl", "progs/v_lightng.mdl", "progs/v_lightng2.mdl",
+            "progs/v_axe.mdl"
+        };
+        for (const char* p : stock_vm) {
+            if (std::find(model_paths.begin(), model_paths.end(), p) != model_paths.end()) continue;
+            int mi = load_model(p);
+            if (mi >= 0) vm_name_to_mi[std::string(p)] = mi;
+        }
+        rebuild_rt_scene();
+    }
 
     struct FrameSnapshot {
         bool valid = false;
@@ -1360,10 +1501,17 @@ return eb.Triangles();
         float proj[16] = {0}, view[16] = {0};
         float eye[3] = {0,0,0};
         int sw = 0, sh = 0;
+        float pain = 0;
+        float health = 100.0f;
         std::vector<zq::render::RtLight> lights;
         struct EntDraw { int edict = 0, model_index = -1, frame = -1, skin = -1;
                          float o[3] = {0,0,0}; float yaw = 0, scale = 1; };
         std::vector<EntDraw> entity_draws;
+        // First-person viewmodel (raster draws it from these; RT bakes it into
+        // the entity triangle list on the game thread already).
+        struct ViewModelDraw { int model_index = -1; int frame = 0; float matrix[16] = {0}; };
+        ViewModelDraw vm;
+        GunMesh gun_mesh;
         std::vector<bool> brush_hidden;
         std::map<int, std::array<float,3>> brush_deltas;
     };
@@ -1447,7 +1595,49 @@ return eb.Triangles();
                     if (!bt.empty()) rt.UpdateEntities(bt, bn);
                 }
                 if (!rt_built) continue;
+
+                // First-person gun: rebuild the small viewmodel triangle set +
+                // BVH EVERY frame on the render thread from the immutable
+                // model-space mesh and the current camera-attached matrix, then
+                // upload (only re-uploads descriptors when the set changes).
+                {
+                    std::vector<zq::render::RtTriangle> gt;
+                    std::vector<zq::render::BvhNode> gn;
+                    if (f.gun_mesh.model_index >= 0 && f.gun_mesh.tile != 0xFFFFFFFFu &&
+                        !f.gun_mesh.verts.empty() && !f.gun_mesh.ids.empty()) {
+                        const float* M = f.vm.matrix;
+                        const zq::app::WorldVertex* ve = f.gun_mesh.verts.data();
+                        const std::uint32_t* id = f.gun_mesh.ids.data();
+                        auto pos = [&](std::size_t i, float out[3]) {
+                            const float* p = ve[id[i]].pos;
+                            float x = p[0], y = p[1], z = p[2];
+                            float w = M[3]*x + M[7]*y + M[11]*z + M[15];
+                            if (w == 0.0f) w = 1.0f;
+                            out[0] = (M[0]*x + M[4]*y + M[8]*z + M[12]) / w;
+                            out[1] = (M[1]*x + M[5]*y + M[9]*z + M[13]) / w;
+                            out[2] = (M[2]*x + M[6]*y + M[10]*z + M[14]) / w;
+                        };
+                        for (std::size_t k = 0; k + 2 < f.gun_mesh.ids.size(); k += 3) {
+                            zq::render::RtTriangle t;
+                            pos(k, t.p0); pos(k+1, t.p1); pos(k+2, t.p2);
+                            std::memcpy(t.uv0, ve[id[k]].uv, 8);
+                            std::memcpy(t.uv1, ve[id[k+1]].uv, 8);
+                            std::memcpy(t.uv2, ve[id[k+2]].uv, 8);
+                            t.tex = f.gun_mesh.tile;
+                            t.light = 0;
+                            float e1x=t.p1[0]-t.p0[0],e1y=t.p1[1]-t.p0[1],e1z=t.p1[2]-t.p0[2];
+                            float e2x=t.p2[0]-t.p0[0],e2y=t.p2[1]-t.p0[1],e2z=t.p2[2]-t.p0[2];
+                            float nx=e1y*e2z-e1z*e2y,ny=e1z*e2x-e1x*e2z,nz=e1x*e2y-e1y*e2x;
+                            if (nx*nx+ny*ny+nz*nz < 1e-12f) continue;
+                            gt.push_back(t);
+                        }
+                        gn = zq::render::BuildBvh(gt);   // reorders gt to match leaf indices
+                    }
+                    rt.UpdateGun(gt, gn);
+                }
                 rt.SetLights(f.lights);
+                rt.SetPainFlash(f.pain);
+                rt.SetHealthFraction(f.health);
                 if (!vulkan.BeginFrame(false)) continue;
                 vulkan.SetCamera(f.proj, f.view);
                 rt.Dispatch(vulkan.GetActiveCommandBuffer(), f.proj, f.view,
@@ -1513,6 +1703,34 @@ return eb.Triangles();
                     m.lightmap = lightmap; m.has_model = true;
                     memcpy(m.model, model.m, sizeof(m.model));
                     vulkan.DrawMesh(m);
+                }
+                // First-person viewmodel (camera-attached gun)
+                if (f.vm.model_index >= 0 && f.vm.model_index < (int)models.size()) {
+                    LoadedModel* lm = &models[f.vm.model_index];
+                    if (lm->mdl) {
+                        if (!mdl_vm_vbuf) {
+                            mdl_vm_vbuf = vulkan.CreateVertexBuffer(lm->vertex_count * sizeof(zq::app::WorldVertex));
+                            mdl_vm_frame = -1;
+                        }
+                        if (f.vm.frame >= 0 && f.vm.frame < lm->mdl->NumFrames() &&
+                            f.vm.frame != mdl_vm_frame) {
+                            build_mdl_frame(*lm->mdl, f.vm.frame, scratch);
+                            if (!scratch.empty()) {
+                                vulkan.UpdateBuffer(mdl_vm_vbuf, scratch.data(),
+                                                    scratch.size() * sizeof(zq::app::WorldVertex));
+                                mdl_vm_frame = f.vm.frame;
+                            }
+                        }
+                        Mat4 vm_model;
+                        for (int i = 0; i < 16; i++) vm_model.m[i] = f.vm.matrix[i];
+                        zq::vk::VulkanAPI::Mesh m;
+                        m.vertex_buffer = mdl_vm_vbuf; m.index_buffer = lm->ibuf;
+                        m.index_count = lm->index_count;
+                        m.texture = lm->skins.empty() ? nullptr : lm->skins[0];
+                        m.lightmap = lightmap; m.has_model = true;
+                        memcpy(m.model, vm_model.m, sizeof(m.model));
+                        vulkan.DrawMesh(m);
+                    }
                 }
                 vulkan.EndFrame();
             }
@@ -1644,6 +1862,177 @@ return eb.Triangles();
         refresh_entities();
         compute_brush_state();
 
+        // ---- Per-tick: viewmodel, muzzle flash, pain flash ----
+        constexpr float EF_MUZZLEFLASH = 2.0f;
+        float cur_health = 100.0f;
+        int cur_weaponframe = 0;
+        bool cur_firing = false;
+        if (progs.Loaded()) {
+            if (vm_weaponmodel_ofs >= 0) {
+                const char* wm = progs.EdictFieldString(kClientEdict, vm_weaponmodel_ofs);
+                if (wm && wm[0]) {
+                    std::string wms(wm);
+                    auto it = vm_name_to_mi.find(wms);
+                    if (it != vm_name_to_mi.end()) {
+                        vm_viewmodel_mi = it->second;
+                    } else {
+                        vm_viewmodel_mi = load_model(wms);
+                        vm_name_to_mi[wms] = vm_viewmodel_mi;
+                    }
+                } else {
+                    // Fallback: map the .weapon item bit to the stock id1 viewmodel.
+                    // QuakeC VMs that never write .weaponmodel (many custom progs
+                    // omit it) still set .weapon on weapon changes, so this covers
+                    // the common case where the model path is missing.
+                    int bit = (vm_weapon_ofs >= 0)
+                        ? (int)progs.EdictFieldFloat(kClientEdict, vm_weapon_ofs) : 0;
+                    const char* path = nullptr;
+                    switch (bit & 0x11FF) {
+                        case    1: path = "progs/v_shot.mdl";  break;
+                        case    2: path = "progs/v_shot2.mdl"; break;
+                        case    4: path = "progs/v_nail.mdl";  break;
+                        case    8: path = "progs/v_nail2.mdl"; break;
+                        case   16: path = "progs/v_rock.mdl";  break;
+                        case   32: path = "progs/v_rock2.mdl"; break;
+                        case   64: path = "progs/v_lightng.mdl";  break;
+                        case  128: path = "progs/v_lightng2.mdl"; break;
+                        case 4096: path = "progs/v_axe.mdl";  break;
+                        default: break;
+                    }
+                    if (path) {
+                        auto it = vm_name_to_mi.find(path);
+                        if (it != vm_name_to_mi.end()) vm_viewmodel_mi = it->second;
+                        else { vm_viewmodel_mi = load_model(path); vm_name_to_mi[path] = vm_viewmodel_mi; }
+                    } else {
+                        vm_viewmodel_mi = -1;
+                    }
+                }
+            }
+            if (vm_weaponframe_ofs >= 0)
+                cur_weaponframe = (int)progs.EdictFieldFloat(kClientEdict, vm_weaponframe_ofs);
+            if (vm_effects_ofs >= 0) {
+                float eff = progs.EdictFieldFloat(kClientEdict, vm_effects_ofs);
+                if ((int)eff & (int)EF_MUZZLEFLASH) cur_firing = true;
+            }
+            if (vm_health_ofs >= 0)
+                cur_health = progs.EdictFieldFloat(kClientEdict, vm_health_ofs);
+        }
+        // Viewmodel animation frame (clamp to valid range)
+        if (vm_viewmodel_mi >= 0 && vm_viewmodel_mi < (int)models.size()) {
+            LoadedModel* lm = &models[vm_viewmodel_mi];
+            if (lm->mdl) {
+                if (cur_weaponframe < 0) cur_weaponframe = 0;
+                if (cur_weaponframe >= lm->mdl->NumFrames()) cur_weaponframe = 0;
+                vm_viewmodel_frame = cur_weaponframe;
+            } else {
+                vm_viewmodel_mi = -1;
+            }
+        } else {
+            vm_viewmodel_mi = -1;
+        }
+        // Muzzle flash timer: arm for 0.09s on shot, decay each tick
+        if (cur_firing) muzzle_flash_timer = 0.09f;
+        else if (muzzle_flash_timer > 0) muzzle_flash_timer -= dt;
+        if (muzzle_flash_timer < 0) muzzle_flash_timer = 0;
+        // Pain flash timer: arm on health drop
+        if (cur_health < prev_health - 0.5f) pain_flash_timer = 0.35f;
+        else if (pain_flash_timer > 0) pain_flash_timer -= dt;
+        if (pain_flash_timer < 0) pain_flash_timer = 0;
+        prev_health = cur_health;
+        // Pain is delivered to the renderer via the frame snapshot (f.pain),
+        // which the render thread applies via RayTracer::SetPainFlash.
+
+        // Compute camera basis for viewmodel + muzzle positioning (the camera
+        // itself is re-derived later from the same yaw/pitch).
+        if (getenv("ZQ_LOOKUP")) { player.pitch = 85.0f; player.yaw = 0.0f; }
+        {
+            float vp = DegToRad(player.pitch);
+            float vy = DegToRad(player.yaw);
+            float fwd_x = std::cos(vp) * std::cos(vy);
+            float fwd_y = std::cos(vp) * std::sin(vy);
+            float fwd_z = std::sin(vp);
+            eye_f[0] = fwd_x; eye_f[1] = fwd_y; eye_f[2] = fwd_z;
+            eye_r[0] = eye_f[1]; eye_r[1] = -eye_f[0]; eye_r[2] = 0.0f; // horizontal right
+            float rl = std::sqrt(eye_r[0]*eye_r[0] + eye_r[1]*eye_r[1]);
+            if (rl > 1e-6f) { eye_r[0] /= rl; eye_r[1] /= rl; } else { eye_r[0] = 1; eye_r[1] = 0; }
+            // up = cross(right, forward) [Z-up]
+            eye_u[0] = eye_r[1]*eye_f[2] - 0;
+            eye_u[1] = 0 - eye_r[0]*eye_f[2];
+            eye_u[2] = eye_r[0]*eye_f[1] - eye_r[1]*eye_f[0];
+            float ul = std::sqrt(eye_u[0]*eye_u[0] + eye_u[1]*eye_u[1] + eye_u[2]*eye_u[2]);
+            if (ul > 1e-6f) { eye_u[0] /= ul; eye_u[1] /= ul; eye_u[2] /= ul; }
+        }
+        // Eye origin (matches the camera eye used later)
+        eye_pos[0] = player.pos.x;
+        eye_pos[1] = player.pos.y;
+        eye_pos[2] = player.pos.z + 28.0f;
+        // Gun position: forward of the eye, centered (no right offset), slightly low.
+        float gun_off_f = 16.0f, gun_off_r = 0.0f, gun_off_u = -6.0f;
+        float gun_x = eye_pos[0] + eye_f[0]*gun_off_f + eye_r[0]*gun_off_r + eye_u[0]*gun_off_u;
+        float gun_y = eye_pos[1] + eye_f[1]*gun_off_f + eye_r[1]*gun_off_r + eye_u[1]*gun_off_u;
+        float gun_z = eye_pos[2] + eye_f[2]*gun_off_f + eye_r[2]*gun_off_r + eye_u[2]*gun_off_u;
+        // Muzzle position: further along the gun barrel.
+        float mzl = (38.0f) / std::sqrt(1.0f*1.0f + 0.50f*0.50f);
+        float bx = (eye_f[0]*1.0f + eye_u[0]*0.50f) * mzl;
+        float by = (eye_f[1]*1.0f + eye_u[1]*0.50f) * mzl;
+        float bz = (eye_f[2]*1.0f + eye_u[2]*0.50f) * mzl;
+        muzzle_pos[0] = gun_x + bx;
+        muzzle_pos[1] = gun_y + by;
+        muzzle_pos[2] = gun_z + bz;
+
+        // Viewmodel matrix. Quake view-models are authored with the BARREL along
+        // model +X; map that to camera forward (with a slight up tilt toward the
+        // screen centre, matching the classic pose), +Y -> right, +Z -> up.
+        {
+            float bl = 1.0f / std::sqrt(1.0f*1.0f + 0.50f*0.50f);
+            float c0x = (eye_f[0]*1.0f + eye_u[0]*0.50f) * bl;
+            float c0y = (eye_f[1]*1.0f + eye_u[1]*0.50f) * bl;
+            float c0z = (eye_f[2]*1.0f + eye_u[2]*0.50f) * bl;
+            float* M = vm_model_mat;
+            M[0] = c0x; M[1] = c0y; M[2] = c0z; M[3] = 0;
+            M[4] = eye_r[0]; M[5] = eye_r[1]; M[6] = eye_r[2]; M[7] = 0;
+            M[8] = eye_u[0]; M[9] = eye_u[1]; M[10] = eye_u[2]; M[11] = 0;
+            M[12] = gun_x; M[13] = gun_y; M[14] = gun_z; M[15] = 1;
+        }
+        vm_health_store = cur_health;
+
+        // Refresh the cached viewmodel base mesh (model-space verts + tile) only
+        // when the weapon or animation frame changes. The render thread rebuilds
+        // the actual gun triangles + BVH from this every frame.
+        {
+            bool needs = (vm_gun_mesh.model_index != vm_viewmodel_mi ||
+                          (vm_viewmodel_mi >= 0 && vm_gun_mesh.frame != vm_viewmodel_frame));
+            if (needs) {
+                vm_gun_mesh = GunMesh{};
+                vm_gun_mesh.model_index = vm_viewmodel_mi;
+                vm_gun_mesh.frame = vm_viewmodel_frame;
+                if (vm_viewmodel_mi >= 0 && vm_viewmodel_mi < (int)models.size()) {
+                    LoadedModel* lm = &models[vm_viewmodel_mi];
+                    if (lm->mdl && vm_viewmodel_frame >= 0 && vm_viewmodel_frame < lm->mdl->NumFrames()) {
+                        auto fkey = std::make_pair(vm_viewmodel_mi, vm_viewmodel_frame);
+                        auto fc = rt_frame_cache.find(fkey);
+                        if (fc == rt_frame_cache.end()) {
+                            // Viewmodels are not spawned entities, so no other
+                            // pass-built their frame geometry: build + cache it.
+                            std::vector<zq::app::WorldVertex> fv;
+                            std::vector<uint32_t> fi;
+                            fi = build_mdl_frame(*lm->mdl, vm_viewmodel_frame, fv);
+                            if (!fv.empty() && !fi.empty())
+                                fc = rt_frame_cache.emplace(fkey, std::make_pair(std::move(fv), std::move(fi))).first;
+                        }
+                        if (fc != rt_frame_cache.end()) {
+                            auto skv = rt_skin_tile.find(std::make_pair(vm_viewmodel_mi, 0));
+                            if (skv != rt_skin_tile.end() && fc->second.first.size() >= 3 && fc->second.second.size() >= 3) {
+                                vm_gun_mesh.verts = fc->second.first;
+                                vm_gun_mesh.ids = fc->second.second;
+                                vm_gun_mesh.tile = skv->second;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Build the RT entity triangle list when the dynamic scene changed,
         // every VM tick (not throttled).
         bool rt_dirty = false;
@@ -1663,6 +2052,13 @@ return eb.Triangles();
                     v = v*31 + (uint64_t)(int)(o[0]*4) + (uint64_t)(int)(o[1]*4) + (uint64_t)(int)(o[2]*4);
                 }
             }
+            // Combat poll: viewmodel, muzzle flash, particles, pain, health.
+            v = v*31 + (uint64_t)(int)(muzzle_flash_timer * 1000);
+            v = v*31 + (uint64_t)(int)(muzzle_pos[0] * 8) + (uint64_t)(int)(muzzle_pos[1] * 8)
+                + (uint64_t)(int)(muzzle_pos[2] * 8);
+            v = v*31 + (uint64_t)std::max(0, vm_viewmodel_mi * 100 + vm_viewmodel_frame);
+            v = v*31 + (uint64_t)(int)(pain_flash_timer * 100);
+            v = v*31 + (uint64_t)zq::engine::ParticleSystem::CountVisible();
             if (v != rt_entity_ver) {
                 rt_entity_ver = v;
                 rebuild_rt_scene();       // game thread: cheap, cached tris only
@@ -1693,6 +2089,27 @@ return eb.Triangles();
                     L.radius = std::min(4000.0f, 1000.0f + inten * 8.0f);
                     rt_lights_all.push_back(L);
                 }
+            }
+            // Muzzle flash dynamic light: orange point light at the gun barrel
+            // for a brief interval after firing (EF_MUZZLEFLASH or live shot).
+            if (muzzle_flash_timer > 0.0f) {
+                zq::render::RtLight mL;
+                mL.pos[0] = muzzle_pos[0]; mL.pos[1] = muzzle_pos[1]; mL.pos[2] = muzzle_pos[2];
+                mL.color[0] = 1.0f; mL.color[1] = 0.6f; mL.color[2] = 0.25f;
+                mL.intensity = 2.0f;
+                mL.radius = 300.0f;
+                rt_lights_all.push_back(mL);
+            }
+            // Viewmodel fill light: a dim warm light near the muzzle keeps the
+            // first-person gun visible even in unlit rooms (the RT scene has no
+            // ambient for the player's own model otherwise).
+            {
+                zq::render::RtLight vL;
+                vL.pos[0] = muzzle_pos[0]; vL.pos[1] = muzzle_pos[1]; vL.pos[2] = muzzle_pos[2];
+                vL.color[0] = 0.42f; vL.color[1] = 0.40f; vL.color[2] = 0.36f;
+                vL.intensity = 0.55f;
+                vL.radius = 200.0f;
+                rt_lights_all.push_back(vL);
             }
             // nearest-k to the eye
             int k = (int)std::min<size_t>(rt_lights_all.size(), 12);
@@ -1755,6 +2172,12 @@ return eb.Triangles();
         }
         f.brush_hidden = brush_hidden;
         f.brush_deltas = brush_deltas;
+        f.pain = std::max(0.0f, std::min(1.0f, pain_flash_timer * 2.8f));
+        f.health = vm_health_store / 100.0f;
+        f.vm.model_index = vm_viewmodel_mi;
+        f.vm.frame = vm_viewmodel_frame;
+        for (int i = 0; i < 16; i++) f.vm.matrix[i] = vm_model_mat[i];
+        f.gun_mesh = vm_gun_mesh;
 
         {
             std::lock_guard<std::mutex> lk(frame_mutex);

@@ -154,6 +154,8 @@ add_library(zq_engine STATIC
     src/engine/move.cpp
     src/engine/gameframe.cpp
     src/engine/game_builtins.cpp
+    src/engine/area_nodes.cpp
+    src/engine/monster_move.cpp
 )
 target_link_libraries(zq_engine PUBLIC zq_core zq_filesystem zq_subsystems zq_vulkan zq_vm)
 

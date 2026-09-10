@@ -109,7 +109,8 @@ std::vector<zq::render::RtTriangle> RtSceneBuilder::Triangles() {
 void RtSceneBuilder::AddMeshWithTile(const void* vertices, std::size_t vertexCount,
                                      std::size_t vertexStride,
                                      const std::uint32_t* indices, std::size_t indexCount,
-                                     std::uint32_t tileIndex, const float model[16]) {
+                                     std::uint32_t tileIndex, const float model[16],
+                                     bool emissive, std::uint32_t tag) {
     if (!vertices || !indices || indexCount < 3) return;
     const uint8_t* v = static_cast<const uint8_t*>(vertices);
     auto vertPos = [&](std::size_t i, float out[3]) {
@@ -136,7 +137,8 @@ void RtSceneBuilder::AddMeshWithTile(const void* vertices, std::size_t vertexCou
         vertPos(i0, t.p0); vertPos(i1, t.p1); vertPos(i2, t.p2);
         vertUV(i0, t.uv0); vertUV(i1, t.uv1); vertUV(i2, t.uv2);
         t.tex = tileIndex;
-        t.light = 0;
+        t.light = emissive ? 1u : 0u;
+        t.tag = tag;
         float e1x=t.p1[0]-t.p0[0],e1y=t.p1[1]-t.p0[1],e1z=t.p1[2]-t.p0[2];
         float e2x=t.p2[0]-t.p0[0],e2y=t.p2[1]-t.p0[1],e2z=t.p2[2]-t.p0[2];
         float nx=e1y*e2z-e1z*e2y,ny=e1z*e2x-e1x*e2z,nz=e1x*e2y-e1y*e2x;

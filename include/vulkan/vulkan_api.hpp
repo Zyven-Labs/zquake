@@ -49,6 +49,7 @@ public:
     // Ray-tracing integration helpers.
     VkCommandBuffer GetActiveCommandBuffer() const { return command_buffers_[current_frame_]; }
     VkImageView GetSwapchainImageView(uint32_t index) const { return swapchain_image_views_[index]; }
+    VkImage GetSwapchainImage(uint32_t index) const { return index < swapchain_images_.size() ? swapchain_images_[index] : VK_NULL_HANDLE; }
     uint32_t GetCurrentImageIndex() const { return image_index_; }
     VkFormat GetSwapchainFormat() const { return swapchain_format_; }
     uint32_t GetSwapchainImageCount() const { return (uint32_t)swapchain_image_views_.size(); }

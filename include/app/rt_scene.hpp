@@ -27,10 +27,13 @@ public:
 
     // Adds geometry using an existing atlas tile index (no texture registration).
     // Used to cheaply re-add dynamic entities each rebuild with a stable tile.
+    // When `emissive` is true the triangles are flagged as self-lit (the compute
+    // shader adds them without shading), e.g. muzzle flash glows and particles.
     void AddMeshWithTile(const void* vertices, std::size_t vertexCount,
                  std::size_t vertexStride,
                  const std::uint32_t* indices, std::size_t indexCount,
-                 std::uint32_t tileIndex, const float model[16]);
+                 std::uint32_t tileIndex, const float model[16],
+                 bool emissive = false, std::uint32_t tag = 0);
 
     // Registers an RGBA texture into the atlas and returns its tile index,
     // WITHOUT adding geometry. Used to include entity skins in the atlas so

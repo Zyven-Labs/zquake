@@ -1,8 +1,9 @@
-// Gameplay QuakeC builtins that need the world geometry / per-frame solid
-// entity list. Ported from the reference pr_cmds.c / sv_* (find, findradius,
-// walkmove, movetogoal, checkbottom, changeyaw, aim, traceline, ...).
+// engine/game_builtins.cpp — Gameplay QuakeC builtins (traceline, walkmove,
+// movetogoal, checkbottom, changeyaw, aim, find, findradius, ...).
 #include "engine/gameframe.hpp"
+#include "engine/monster_move.hpp"
 #include "engine/cvar_system.hpp"
+#include "engine/particle.hpp"
 #include "core/logging/logger.hpp"
 #include <cmath>
 #include <cstring>
@@ -195,146 +196,34 @@ void Buf_checkbottom(vm::ProgVM& vm) {
     vm.SetReturnFloat(1);
 }
 
-// walkmove (#32): walkstep `self` by up to `dist` units along the direction
-// vector parm0 (QV progs pass self.movedir). Mirrors SV_movestep: try the
-// direct move, else a step up and over small lips, dropping back to the floor.
-// Returns 1 if the move succeeded, 0 if blocked.
+// walkmove (#32): float(float yaw, float dist) — mirrors PF_walkmove in
+// the reference (pr_cmds.c:1146). Returns 0 if the entity is not on ground,
+// flying, or swimming.
 void Buf_walkmove(vm::ProgVM& vm) {
-    const GameTraceContext& g = GetGameTraceContext();
     int self = SelfEnt(vm);
-    int fo = Fld(vm, "origin"), fm = Fld(vm, "mins"), fx = Fld(vm, "maxs");
-    if (self < 0 || !g.map || fo < 0 || fm < 0 || fx < 0) { vm.SetReturnFloat(0); return; }
+    if (self <= 0) { vm.SetReturnFloat(0); return; }
+    int ff = Fld(vm, "flags");
+    if (ff < 0) { vm.SetReturnFloat(0); return; }
 
-    float dir[3];
-    vm.ParmVector(0, dir);
-    float dist = vm.ParmFloat(1);
-    float dlen = std::sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
-    float mv[3] = { 0, 0, 0 };
-    if (dlen > 0) { mv[0] = dir[0]/dlen * dist; mv[1] = dir[1]/dlen * dist; }
-
-    float org[3], mn[3], mx[3];
-    vm.EdictFieldVector(self, fo, org);
-    vm.EdictFieldVector(self, fm, mn);
-    vm.EdictFieldVector(self, fx, mx);
-    // monsters are block-sized; the VM keeps mins/maxs as world-extent boxes
-    // centred on the origin (builders set them), so MoveBox matches directly.
-
-    // 1) try the direct horizontal move
-    float end[3] = { org[0]+mv[0], org[1]+mv[1], org[2] };
-    auto tr = MoveBox(*g.map, mn, mx, org, end, g.ents, g.num_ents, self);
-    if (tr.fraction == 1.0f) {
-        // Reference SV_movestep: confirm the target still has floor underneath
-        // (step-down check). If there is no floor within a step below, the
-        // monster walked off an edge - do NOT let it fly; stop at the edge.
-        constexpr float STEPSIZE = 18.0f;
-        float raised[3] = { end[0], end[1], end[2] + STEPSIZE };
-        float down[3] = { end[0], end[1], end[2] - STEPSIZE * 2 };
-        auto d = MoveBox(*g.map, mn, mx, raised, down, g.ents, g.num_ents, self);
-        if (d.allsolid || d.startsolid || d.fraction >= 1.0f) {
-            vm.SetReturnFloat(0);   // walked off an edge: stop here
-            return;
-        }
-        vm.SetEdictFieldVector(self, fo, end);
-        SetFlags(vm, self, Fld(vm, "flags"), IntFlags(vm, self, Fld(vm, "flags")) | FL_ONGROUND);
-        vm.SetReturnFloat(1);
+    int flags = IntFlags(vm, self, ff);
+    if (!(flags & (FL_ONGROUND | FL_FLY | FL_SWIM))) {
+        vm.SetReturnFloat(0);
         return;
     }
-    if (tr.allsolid || tr.startsolid) { vm.SetReturnFloat(0); return; }
 
-    // 2) step up to clear a small lip (STEPSIZE 18 like the reference)
-    constexpr float STEPSIZE = 18.0f;
-    float raised[3] = { org[0], org[1], org[2] + STEPSIZE };
-    float forend[3] = { raised[0]+mv[0], raised[1]+mv[1], raised[2] };
-    auto f = MoveBox(*g.map, mn, mx, raised, forend, g.ents, g.num_ents, self);
-    if (f.allsolid || f.startsolid || f.fraction < 1.0f) { vm.SetReturnFloat(0); return; }
+    float yaw = vm.ParmFloat(0);
+    float dist = vm.ParmFloat(1);
 
-    // 3) drop back down to the floor
-    float down[3] = { forend[0], forend[1], forend[2] - STEPSIZE - 32.0f };
-    auto d = MoveBox(*g.map, mn, mx, forend, down, g.ents, g.num_ents, self);
-    if (d.allsolid || d.fraction >= 1.0f) { vm.SetReturnFloat(0); return; }
-    vm.SetEdictFieldVector(self, fo, d.endpos);
-    SetFlags(vm, self, Fld(vm, "flags"), IntFlags(vm, self, Fld(vm, "flags")) | FL_ONGROUND);
-    vm.SetReturnFloat(1);
+    constexpr float DEG2RAD = PI / 180.0f;
+    float rad = yaw * DEG2RAD;
+    float mv[3] = { std::cos(rad) * dist, std::sin(rad) * dist, 0 };
+
+    vm.SetReturnFloat(SV_Movestep(vm, self, mv, true) ? 1.0f : 0.0f);
 }
 
 // movetogoal (#67): (entity goal) - walk toward the goal entity's origin.
 void Buf_movetogoal(vm::ProgVM& vm) {
-    const GameTraceContext& g = GetGameTraceContext();
-    int self = SelfEnt(vm);
-    int fo = Fld(vm, "origin"), fm = Fld(vm, "mins"), fx = Fld(vm, "maxs");
-    int fg = Fld(vm, "goalentity"), ff = Fld(vm, "flags"), fs = Fld(vm, "speed");
-    if (self < 0 || !g.map || fo < 0) { vm.SetReturnFloat(0); return; }
-    int goal = vm.ParmEdictNum(0);
-    if (goal <= 0) goal = (fg >= 0) ? vm.EdictFieldEntity(self, fg) : 0;
-    if (goal <= 0) { vm.SetReturnFloat(0); return; }
-    if (fg >= 0) vm.EdictFieldInt(self, fg) = vm.EdictNumToProg(goal);
-
-    float org[3], gorg[3];
-    vm.EdictFieldVector(self, fo, org);
-    vm.EdictFieldVector(goal, fo, gorg);
-    float dx = gorg[0]-org[0], dy = gorg[1]-org[1];
-    float dist = std::sqrt(dx*dx + dy*dy);
-    if (dist < 1.0f) { vm.SetReturnFloat(1); return; }
-
-    float speed = (fs >= 0) ? vm.EdictFieldFloat(self, fs) : 0.0f;
-    if (speed <= 0) speed = 100.0f;
-    float frametime = 0.016f;
-    int gt = vm.FindGlobal("frametime");
-    if (gt >= 0) memcpy(&frametime, &vm.Global(gt), 4);
-    if (frametime <= 0) frametime = 0.016f;
-    float step = speed * frametime;
-    if (step > dist) step = dist;
-
-    float mve[3] = { dx/dist * step, dy/dist * step, 0 };
-    float mn[3] = {0,0,0}, mx[3] = {0,0,0};
-    if (fm >= 0 && fx >= 0) {
-        vm.EdictFieldVector(self, fm, mn);
-        vm.EdictFieldVector(self, fx, mx);
-    }
-
-    auto doStep = [&](const float* start, const float* end,
-                      BSPMap::TraceResult& out) -> bool {
-        auto t = MoveBox(*g.map, mn, mx, start, end, g.ents, g.num_ents, self);
-        if (t.allsolid || t.startsolid) return false;
-        if (t.fraction == 1.0f) {
-            // Reference SV_movestep: confirm floor below; walking off an edge
-            // must not let the monster fly (no gravity while FL_ONGROUND).
-            constexpr float STEPSIZE = 18.0f;
-            float raised[3] = { end[0], end[1], end[2] + STEPSIZE };
-            float down[3] = { end[0], end[1], end[2] - STEPSIZE * 2 };
-            auto d = MoveBox(*g.map, mn, mx, raised, down, g.ents, g.num_ents, self);
-            if (d.allsolid || d.startsolid || d.fraction >= 1.0f) return false;
-            out = t; return true;
-        }
-        constexpr float STEPSIZE = 18.0f;
-        float raised[3] = { start[0], start[1], start[2] + STEPSIZE };
-        float fe[3] = { raised[0] + (end[0]-start[0]), raised[1] + (end[1]-start[1]), raised[2] };
-        auto fr = MoveBox(*g.map, mn, mx, raised, fe, g.ents, g.num_ents, self);
-        if (fr.allsolid || fr.startsolid || fr.fraction < 1.0f) out = t;
-        else {
-            float down[3] = { fe[0], fe[1], fe[2] - STEPSIZE - 32.0f };
-            auto d = MoveBox(*g.map, mn, mx, fe, down, g.ents, g.num_ents, self);
-            if (d.allsolid || d.fraction >= 1.0f) { out = t; return false; }
-            out = d;
-        }
-        return true;
-    };
-
-    BSPMap::TraceResult tr;
-    float dst[3] = { org[0]+mve[0], org[1]+mve[1], org[2] };
-    bool ok = doStep(org, dst, tr);
-    if (ok) vm.SetEdictFieldVector(self, fo, tr.endpos);
-    if (ff >= 0) vm.EdictFieldFloat(self, ff) = (float)(IntFlags(vm, self, ff) | FL_ONGROUND);
-    int fv = Fld(vm, "velocity");
-    if (fv >= 0) {
-        float v[3] = { dx/dist * speed, dy/dist * speed, 0 };
-        vm.SetEdictFieldVector(self, fv, v);
-    }
-    if (Fld(vm, "ideal_yaw") >= 0) {
-        float yaw = AngMod(std::atan2(dy, dx) * 180.0f / PI);
-        vm.EdictFieldFloat(self, Fld(vm, "ideal_yaw")) = yaw;
-    }
-    vm.SetReturnFloat(ok ? 1.0f : 0.0f);
+    SV_MoveToGoal(vm);
 }
 
 // changeyaw (#49)
@@ -410,6 +299,18 @@ void Buf_droptofloor(vm::ProgVM& vm) {
 // Write* (#52-59), centerprint (#73), ambientsound (#74), multicast (#82)
 void Buf_noop(vm::ProgVM& vm) { (void)vm; }
 
+// particle (#48): void(vector org, vector dir, float color, float count) -
+// feeds the engine particle store which the renderers consume (blood, sparks,
+// bullet puffs fired by T_Blood / attacks).
+void Buf_particle(vm::ProgVM& vm) {
+    float org[3], dir[3];
+    vm.ParmVector(0, org);
+    vm.ParmVector(1, dir);
+    float color = vm.ParmFloat(2);
+    int count = (int)vm.ParmFloat(3);
+    ParticleSystem::StartParticle(org, dir, count, (int)color);
+}
+
 // setspawnparms (#78)
 void Buf_setspawnparms(vm::ProgVM& vm) { (void)vm; }
 
@@ -436,7 +337,9 @@ void RegisterGameBuiltins(vm::ProgVM& vm) {
     vm.RegisterBuiltin(41, Buf_pointcontents);
     vm.RegisterBuiltin(44, Buf_aim);
     vm.RegisterBuiltin(45, Buf_cvar);
+    vm.RegisterBuiltin(46, Buf_noop);          // localcmd
     vm.RegisterBuiltin(47, Buf_nextent);
+    vm.RegisterBuiltin(48, Buf_particle);
     vm.RegisterBuiltin(49, Buf_changeyaw);
     vm.RegisterBuiltin(52, Buf_noop);
     vm.RegisterBuiltin(53, Buf_noop);
@@ -448,6 +351,7 @@ void RegisterGameBuiltins(vm::ProgVM& vm) {
     vm.RegisterBuiltin(59, Buf_noop);
     vm.RegisterBuiltin(67, Buf_movetogoal);
     vm.RegisterBuiltin(68, Buf_precache);      // precache_file
+    vm.RegisterBuiltin(69, Buf_noop);          // makestatic
     vm.RegisterBuiltin(72, Buf_cvar_set);
     vm.RegisterBuiltin(73, Buf_noop);          // centerprint
     vm.RegisterBuiltin(74, Buf_noop);          // ambientsound

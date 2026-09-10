@@ -50,6 +50,12 @@ public:
     // updates the entity descriptor bindings (7,8).
     void UpdateEntities(std::vector<RtTriangle> tris, const std::vector<BvhNode>& nodes);
 
+    // Uploads the small first-person viewmodel triangle set + BVH (bindings
+    // 9,10) used by the on-top weapon overlay. When `tris` is empty the gun is
+    // hidden. The BVH must already match the reordered triangle list (i.e.
+    // BuildBvh must have run on `tris` and returned `nodes`).
+    void UpdateGun(std::vector<RtTriangle> tris, const std::vector<BvhNode>& nodes);
+
     // Copies the GPU-built entity triangle buffer (Morton-reordered) and BVH
     // nodes back to the CPU (used by the CPU-vs-GPU parity test).
     bool ReadbackEntity(std::vector<RtTriangle>& trisOut, std::vector<BvhNode>& nodesOut) const;
@@ -70,6 +76,14 @@ public:
     // Copies the current storage image (what the blit samples) to CPU. Used to
     // verify the actual presented frame.
     bool CaptureStorage(std::vector<uint8_t>& rgbaOut);
+
+    // Selects a 0..1 full-screen red tint applied in the compute shader for
+    // damage feedback. Read by UpdateCameraUBO on the render thread.
+    void SetPainFlash(float p) { pain_ = p; }
+
+    // Selects the 0..1 health fraction drawn as the screen-space HUD bar in
+    // the blit pass (fragment push constant).
+    void SetHealthFraction(float f) { health_ = f < 0.0f ? -1.0f : (f > 1.0f ? 1.0f : f); }
 
 private:
     void UpdateCameraUBO(const float* projection, const float* view);
@@ -101,6 +115,8 @@ private:
     VkBuffer light_buf_ = VK_NULL_HANDLE;
     VkDeviceMemory light_mem_ = VK_NULL_HANDLE;
     std::uint32_t light_count_ = 0;
+    float pain_ = 0.0f;
+    float health_ = 1.0f;
 
     VkBuffer tile_buf_ = VK_NULL_HANDLE;
     VkDeviceMemory tile_mem_ = VK_NULL_HANDLE;
@@ -115,6 +131,17 @@ private:
     VkDeviceMemory enode_mem_ = VK_NULL_HANDLE;
     std::uint32_t enode_count_ = 0;
     VkDeviceSize enode_cap_ = 0;
+
+    // First-person viewmodel (gun) triangle set + BVH: tiny dedicated buffers
+    // for the on-top weapon overlay.
+    VkBuffer gtri_buf_ = VK_NULL_HANDLE;
+    VkDeviceMemory gtri_mem_ = VK_NULL_HANDLE;
+    std::uint32_t gtri_count_ = 0;
+    VkDeviceSize gtri_cap_ = 0;
+    VkBuffer gnode_buf_ = VK_NULL_HANDLE;
+    VkDeviceMemory gnode_mem_ = VK_NULL_HANDLE;
+    std::uint32_t gnode_count_ = 0;
+    VkDeviceSize gnode_cap_ = 0;
 
     VkBuffer cam_ubo_ = VK_NULL_HANDLE;
     VkDeviceMemory cam_mem_ = VK_NULL_HANDLE;

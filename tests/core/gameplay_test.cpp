@@ -9,6 +9,7 @@
 #include "engine/bsp.hpp"
 #include "engine/move.hpp"
 #include "engine/gameframe.hpp"
+#include "engine/monster_move.hpp"
 #include "filesystem/pak_archive.hpp"
 #include <cstring>
 #include <vector>
@@ -29,6 +30,7 @@ bool SetupGame(ProgVM& vm, BSPMap& map) {
     zq::vm::RegisterDefaultBuiltins(vm);
     RegisterGameBuiltins(vm);
     if (!map.Load(md.data(), md.size())) return false;
+    InitAreaNodes(map); // area-node tree mirrors the game's map load
 
     vm.AllocateEdicts(2); // world + client
     vm.SetTime(0); vm.SetFrametime(0);
@@ -139,6 +141,99 @@ TEST_CASE("Gameplay: engine-side jump sets vertical velocity", "[gameplay]") {
     RunPlayerMove(map, p, cmd, 0.016f, mv);
     REQUIRE(p.velocity[2] > 100.0f);
     REQUIRE(p.velocity[2] <= 274.0f);
+}
+
+// Parity: the client walk physics gets its grounded state from BEFORE
+// PlayerPreThink. The SP progs PlayerPreThink clears the FL_ONGROUND flag
+// mid-frame, so reading it back after PreThink makes the player look airborne
+// forever: no ground friction (slides) and air-control capped at 30 u/s
+// (moves very slowly). The app pre-syncs the flag from the previous frame's
+// grounded state, so the engine must capture it that early.
+TEST_CASE("Parity: client keeps ground friction/accel across PlayerPreThink flag clear", "[gameplay][parity]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    int ff = vm.FindField("flags");
+    std::vector<SolidEntity> solids;
+    BuildSolidList(vm, map, solids, 1);
+    SetGameTraceContext(&map, solids.data(), (int)solids.size(), 1);
+
+    ClientPhysics cin;
+    cin.forwardmove = 320;   // W
+    cin.move_vars = MoveVars{};
+
+    bool grounded = false;
+    float maxv = 0.0f;
+    for (int f = 0; f < 30; f++) {
+        if (ff >= 0) {
+            int fl = (int)vm.EdictFieldFloat(1, ff);
+            fl |= 8;   // FL_CLIENT
+            if (grounded) fl |= FL_ONGROUND;
+            else fl &= ~FL_ONGROUND;
+            vm.EdictFieldFloat(1, ff) = (float)fl;
+        }
+        RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+        float v = std::sqrt(cin.out_velocity[0] * cin.out_velocity[0] +
+                            cin.out_velocity[1] * cin.out_velocity[1]);
+        if (v > maxv) maxv = v;
+        if (cin.out_onground) grounded = true;
+    }
+    REQUIRE(grounded);                                  // lands and stays grounded
+    REQUIRE(maxv > 150.0f);   // ground accel well past the 30 u/s air ceiling
+}
+
+TEST_CASE("Parity: client impulse 2 selects the shotgun (W_WeaponFrame bind)", "[gameplay][parity]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    std::vector<SolidEntity> solids;
+    BuildSolidList(vm, map, solids, 1);
+    SetGameTraceContext(&map, solids.data(), (int)solids.size(), 1);
+
+    int fi = vm.FindField("impulse");
+    int fw = vm.FindField("weapon");
+    int fit = vm.FindField("items");
+    int fa = vm.FindField("ammo_shells");
+    REQUIRE(fi >= 0); REQUIRE(fw >= 0); REQUIRE(fit >= 0); REQUIRE(fa >= 0);
+
+    // Arm the shotgun like the B3 starter loadout.
+    vm.EdictFieldFloat(1, fit) = (float)((int)vm.EdictFieldFloat(1, fit) | 1);   // IT_SHOTGUN
+    vm.EdictFieldFloat(1, fa) = 25;
+
+    ClientPhysics cin;
+    RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);   // warm frame
+
+    cin.impulse = 2;   // 2 = shotgun (matches NUM2 binding wiring)
+    RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+
+    REQUIRE((int)vm.EdictFieldFloat(1, fw) == 1);        // IT_SHOTGUN armed
+    REQUIRE((int)vm.EdictFieldFloat(1, fi) == 0);        // QC consumed the impulse
+}
+
+TEST_CASE("Parity: EF_MUZZLEFLASH registers one frame then clears", "[gameplay][parity]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    std::vector<SolidEntity> solids;
+    BuildSolidList(vm, map, solids, 1);
+    SetGameTraceContext(&map, solids.data(), (int)solids.size(), 1);
+
+    int fe = vm.FindField("effects");
+    REQUIRE(fe >= 0);
+
+    ClientPhysics cin;                       // idle: no buttons, no impulse
+    // Warm frame: consume any residue the spawn may have left in .effects.
+    RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+
+    // Simulate a weapon think setting EF_MUZZLEFLASH (bit 1) during this frame.
+    vm.EdictFieldFloat(1, fe) = (float)((int)vm.EdictFieldFloat(1, fe) | 2);
+    int visible = ((int)vm.EdictFieldFloat(1, fe)) & 2;   // app-side per-tick read
+    REQUIRE(visible == 2);                                // visible right after the firing frame
+
+    // The next client frame consumes the residue at its start (retail clear).
+    RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+    int after_idle_frame = ((int)vm.EdictFieldFloat(1, fe)) & 2;
+    REQUIRE(after_idle_frame == 0);                       // cleared before the next shot
 }
 
 TEST_CASE("Gameplay: door-use scan finds a func_door when facing it", "[gameplay]") {
@@ -579,4 +674,65 @@ TEST_CASE("Parity: door completes one open-hold-close cycle without flapping", "
     REQUIRE(maxd > 20.0f);              // opened
     REQUIRE(closed_after_open > 0);      // closed again after opening
     REQUIRE(flips < 4);                  // no flapping (open + close = ~1 reversal)
+}
+
+// Test the new yaw-based walkmove builtin (float yaw, float dist).
+TEST_CASE("Parity: walkmove moves monster toward player via yaw and stops at walls", "[gameplay][parity]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    int fc = vm.FindField("classname"), fo = vm.FindField("origin");
+    int fm = vm.FindField("mins"), fmx = vm.FindField("maxs");
+    int fr = vm.FindField("flags"), fe = vm.FindField("enemy");
+    REQUIRE(fc >= 0);
+    REQUIRE(fo >= 0);
+    REQUIRE(fm >= 0);
+    REQUIRE(fmx >= 0);
+    REQUIRE(fr >= 0);
+
+    // find a dog
+    int dog = -1;
+    for (int i = 2; i < 1024; i++)
+        if (!vm.EdictFree(i) && std::strcmp(vm.EdictFieldString(i, fc), "monster_dog") == 0) { dog = i; break; }
+    REQUIRE(dog > 0);
+
+    // place the dog in a known open spot in front of the player
+    float porg[3]; vm.EdictFieldVector(1, fo, porg);
+    float spot[3] = { porg[0] + 64, porg[1], porg[2] };
+    vm.SetEdictFieldVector(dog, fo, spot);
+    // set dog size to a typical monster bbox
+    { float mn[3] = {-16,-16,-24}; vm.SetEdictFieldVector(dog, fm, mn); }
+    { float mx[3] = {16,16,24};    vm.SetEdictFieldVector(dog, fmx, mx); }
+    vm.EdictFieldFloat(dog, fr) = (float)(FL_ONGROUND);       // walkmove gate
+    vm.EdictFieldFloat(dog, fe) = vm.EdictNumToProg(1);       // enemy = player
+
+    float start_d2 = (spot[0]-porg[0])*(spot[0]-porg[0]) + (spot[1]-porg[1])*(spot[1]-porg[1]);
+
+    // Run the engine frame (gravity + think), then use walkmove builtin
+    // to drive the dog toward the player by yaw (the reference id1 path).
+    std::vector<SolidEntity> solids;
+    float min_d2 = start_d2;
+    for (int f = 0; f < 30; f++) {
+        BuildSolidList(vm, map, solids, dog);
+        SetGameTraceContext(&map, solids.data(), (int)solids.size(), dog);
+
+        // face the player: compute yaw to player
+        float dorg[3]; vm.EdictFieldVector(dog, fo, dorg);
+        float dy = porg[1]-dorg[1], dx = porg[0]-dorg[0];
+        float yaw = std::atan2(dy, dx) * 180.0f / 3.14159265f;
+        if (yaw < 0) yaw += 360.0f;
+
+        constexpr float DEG2RAD = 3.14159265f/180.0f;
+        float rad = yaw * DEG2RAD;
+        float mv[3] = { std::cos(rad)*32.0f, std::sin(rad)*32.0f, 0 };
+        bool ok = SV_Movestep(vm, dog, mv, true);
+        (void)ok;
+
+        RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1);
+
+        float dg[3]; vm.EdictFieldVector(dog, fo, dg);
+        float d2 = (dg[0]-porg[0])*(dg[0]-porg[0]) + (dg[1]-porg[1])*(dg[1]-porg[1]);
+        if (d2 < min_d2) min_d2 = d2;
+    }
+    REQUIRE(min_d2 < start_d2);          // closed in on the player
 }

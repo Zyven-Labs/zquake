@@ -2,7 +2,7 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// Triangle storage (std430), mirrors CPU RtTriangle (80 bytes).
+// Triangle storage (std430), mirrors CPU RtTriangle (96 bytes).
 struct Tri {
     vec4 p0;
     vec4 p1;
@@ -12,6 +12,8 @@ struct Tri {
     vec2 uv2;
     uint tex;
     uint light;
+    uint tag;
+    uint _pad;
 };
 layout(std430, binding = 0) readonly buffer TriBuf { Tri tris[]; };
 
@@ -31,7 +33,7 @@ layout(std430, binding = 1) readonly buffer NodeBuf { BvhNode nodes[]; };
 layout(std140, binding = 2) uniform CamUBO {
     mat4 invViewProj;
     vec3 camPos;
-    float _pad0;
+    float painFlash;      // 0..1: full-screen red tint for damage feedback
     vec3 lightDir;    // unit direction TOWARD the light (fallback key light)
     float _pad1;
     vec3 lightColor;
@@ -43,6 +45,7 @@ layout(std140, binding = 2) uniform CamUBO {
     uint numLights;   // number of point lights
     uint etriCount;   // number of MDL entity triangles
     uint numShadowLights; // how many of the lights cast shadow rays
+    uint gunTriCount; // number of first-person viewmodel triangles
 } cam;
 
 // Point lights (from map `light` entities). pos.xyz = origin, pos.w = intensity;
@@ -59,6 +62,11 @@ layout(std430, binding = 6) readonly buffer TileBuf { vec4 tileInfo[]; };
 // Dynamic MDL entity triangles + BVH (separate from the static world).
 layout(std430, binding = 7) readonly buffer ETriBuf { Tri etris[]; };
 layout(std430, binding = 8) readonly buffer ENodeBuf { BvhNode enodes[]; };
+
+// First-person viewmodel (current weapon): small dedicated triangle set + BVH
+// rebuilt only when the viewmodel changes, so the on-top overlay stays cheap.
+layout(std430, binding = 9) readonly buffer GunTriBuf { Tri gtris[]; };
+layout(std430, binding = 10) readonly buffer GunNodeBuf { BvhNode gunodes[]; };
 
 layout(binding = 3) uniform sampler2D uAtlas;
 
@@ -214,6 +222,47 @@ bool traceAny(vec3 o, vec3 d, float tMax, out Tri hit, out float u, out float v,
     return false;
 }
 
+// First-person viewmodel overlay: choose-hit over the dedicated gun BVH (its
+// own small buffer, tag-free). Rendered on top of the scene regardless of
+// depth, matching Quake's "viewmodel drawn last" look.
+bool traceGun(vec3 o, vec3 d, float tMax, out Tri hit, out float u, out float v, out float t) {
+    if (cam.gunTriCount == 0u) return false;
+    int stack[kStackSize];
+    int sp = 0;
+    stack[sp++] = 0;
+    bool found = false;
+    float bestT = tMax;
+    while (sp > 0) {
+        int idx = stack[--sp];
+        BvhNode n = gunodes[idx];
+        float tNear, tFar;
+        if (!rayAabb(o, d, n.aabbMin, n.aabbMax, 0.0, bestT, tNear, tFar))
+            continue;
+        if (n.triCount > 0) {
+            int first = -(n.leftFirst) - 1;
+            for (int i = first; i < first + n.triCount; i++) {
+                float tt, tu, tv;
+                if (rayTri(o, d, gtris[i], 0.0, bestT, tt, tu, tv)) {
+                    bestT = tt; u = tu; v = tv; t = tt; hit = gtris[i]; found = true;
+                }
+            }
+        } else {
+            if (sp + 1 < kStackSize) { stack[sp++] = n.rightFirst; stack[sp++] = n.leftFirst; }
+        }
+    }
+    return found;
+}
+bool traceGunRed(vec3 o, vec3 d, out float t) {
+    if (cam.gunTriCount == 0u) return false;
+    float bestT = 1e30;
+    bool found = false;
+    for (uint i = 0u; i < cam.gunTriCount; i++) {
+        float tt, tu, tv;
+        if (rayTri(o, d, gtris[i], 0.0, bestT, tt, tu, tv)) { bestT = tt; found = true; }
+    }
+    return found;
+}
+
 // Shadow test over BOTH world and entity geometry. skipW/skipE are the source
 // triangle indices to ignore (the surface the ray leaves), -1 if not applicable.
 bool traceShadow(vec3 o, vec3 d, float tMax, int skipW, int skipE) {
@@ -324,7 +373,18 @@ vec3 rayShade(vec3 o, vec3 d) {
         uint ti2 = hit.tex;
         vec4 ti = tileInfo[ti2];
         vec2 atlasUV = (ti.xy + fract(uv) * ti.zw) / cam.atlasSize;
-        vec3 albedo = texture(uAtlas, atlasUV).rgb;
+        vec4 tint = texture(uAtlas, atlasUV);
+        vec3 albedo = tint.rgb;
+
+        // Emissive surfaces (glow quads for particles / muzzle flash / health
+        // bar): fullbright emission, no bounce — the texture tile itself is the
+        // emission profile (e.g. radial gradient for soft falloff), with the
+        // alpha channel as the glow's opacity mask.
+        if (hit.light != 0u) {
+            color += tint.rgb * tint.a * throughput * 1.7;
+            break;
+        }
+
         color += albedo * throughput * (1.0 - mirror) * directLight(P, N, isEnt, srcIdx);
 
 
@@ -357,16 +417,37 @@ void main() {
     vec3 d = normalize(P - cam.camPos);
 
     vec3 color;
-    if (cam.triCount == 0u) {
-        // No scene: draw sky.
-        float h = max(d.z, 0.0);
-        color = mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
-    } else {
-        color = rayShade(cam.camPos, d);
+    {
+        float gmint;
+        Tri ghit; float gu, gv, gt;
+        if (traceGun(cam.camPos, d, 1e30, ghit, gu, gv, gt)) {
+            vec4 ti = tileInfo[ghit.tex];
+            vec2 uv = ghit.uv0*(1.0 - gu - gv) + ghit.uv1*gu + ghit.uv2*gv;
+            // Viewmodel UVs are normalized to the skin; map tile->atlas 1:1,
+            // inset half a texel so bilinear sampling never bleeds into a
+            // neighbouring tile.
+            vec2 px = clamp(uv * ti.zw, vec2(0.5), ti.zw - vec2(0.5));
+            vec2 atlasUV = (ti.xy + px) / cam.atlasSize;
+            vec3 albedo = texture(uAtlas, atlasUV).rgb;
+            vec3 n = triNormal(ghit);
+            float lam = max(dot(n, normalize(cam.lightDir)), 0.0);
+            color = albedo * (0.75 + 0.35 * lam) + albedo * 0.05;
+        } else if (cam.triCount == 0u) {
+            // No scene: draw sky.
+            float h = max(d.z, 0.0);
+            color = mix(vec3(0.10, 0.13, 0.22), vec3(0.55, 0.62, 0.72), h);
+        } else {
+            color = rayShade(cam.camPos, d);
+        }
     }
     // Desaturate: mix the colour toward its luminance (grey) by `SAT`.
     const float SAT = 0.5;
     float lum = dot(color, vec3(0.299, 0.587, 0.114));
     color = mix(vec3(lum), color, SAT);
+
+    // Pain flash: brief red tint when taking damage (pulsed via cam.painFlash 0..1)
+    float pf = clamp(cam.painFlash, 0.0, 0.8);
+    color = mix(color, vec3(1.0, 0.15, 0.1), pf);
+
     imageStore(outImage, pix, vec4(color, 1.0));
 }

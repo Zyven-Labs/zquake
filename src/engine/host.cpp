@@ -86,7 +86,7 @@ void Host::RunFrame() {
     Input::Poll();
     
     float dt = static_cast<float>(frame_time_);
-    ParticleSystem::UpdateParticles(dt);
+    ParticleSystem::Step(dt);
     
     auto end = clock::now();
     frame_time_ = std::chrono::duration<double>(end - start).count();

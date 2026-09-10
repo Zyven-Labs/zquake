@@ -204,7 +204,7 @@ void RegisterDefaultBuiltins(ProgVM& vm) {
     vm.RegisterBuiltin(15, [](ProgVM& v) { v.FreeEdict(v.ParmEdictNum(0)); });
     vm.RegisterBuiltin(19, [](ProgVM& v) { v.SetReturnString(v.ParmString(0)); }); // precache_sound
     vm.RegisterBuiltin(20, [](ProgVM& v) { v.SetReturnString(v.ParmString(0)); }); // precache_model
-    vm.RegisterBuiltin(23, [](ProgVM& v) { log::Info(v.ParmString(1)); }); // bprint
+    vm.RegisterBuiltin(23, [](ProgVM& v) { log::Info(v.ParmString(0)); }); // bprint
     vm.RegisterBuiltin(24, [](ProgVM& v) { log::Info(v.ParmString(2)); }); // sprint
     vm.RegisterBuiltin(25, [](ProgVM& v) { log::Info(v.ParmString(0)); }); // dprint
     vm.RegisterBuiltin(26, [](ProgVM& v) { // ftos

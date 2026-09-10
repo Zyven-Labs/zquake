@@ -38,6 +38,7 @@ struct CamUBO {
     std::uint32_t numLights;
     std::uint32_t etriCount;
     std::uint32_t numShadowLights;
+    std::uint32_t gunTriCount;
 };
 
 // Point light as laid out for the std430 LightBuf (32 bytes, matches PLight).
@@ -167,7 +168,7 @@ void RayTracer::Shutdown() {
 
 bool RayTracer::CreatePipelines() {
     // ---- Compute pipeline (ray trace) ----
-    VkDescriptorSetLayoutBinding compute_bindings[9] = {};
+    VkDescriptorSetLayoutBinding compute_bindings[11] = {};
     compute_bindings[0] = { 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
     compute_bindings[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
     compute_bindings[2] = { 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
@@ -177,10 +178,12 @@ bool RayTracer::CreatePipelines() {
     compute_bindings[6] = { 6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
     compute_bindings[7] = { 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
     compute_bindings[8] = { 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    compute_bindings[9] = { 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    compute_bindings[10] = { 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 
     VkDescriptorSetLayoutCreateInfo compute_lci = {};
     compute_lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    compute_lci.bindingCount = 9;
+    compute_lci.bindingCount = 11;
     compute_lci.pBindings = compute_bindings;
     if (vkCreateDescriptorSetLayout(dev_, &compute_lci, nullptr, &compute_set_layout_) != VK_SUCCESS)
         return false;
@@ -239,6 +242,13 @@ bool RayTracer::CreatePipelines() {
     blit_plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     blit_plci.setLayoutCount = 1;
     blit_plci.pSetLayouts = &blit_set_layout_;
+    // Screen-space HUD state (health fraction + blit size) for the blit stage.
+    VkPushConstantRange blit_pc = {};
+    blit_pc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    blit_pc.offset = 0;
+    blit_pc.size = 12;
+    blit_plci.pushConstantRangeCount = 1;
+    blit_plci.pPushConstantRanges = &blit_pc;
     if (vkCreatePipelineLayout(dev_, &blit_plci, nullptr, &blit_layout_) != VK_SUCCESS) return false;
 
     // Blit render pass (color only, no depth).
@@ -326,7 +336,7 @@ bool RayTracer::CreatePipelines() {
 
 bool RayTracer::CreateDescriptors() {
     VkDescriptorPoolSize sizes[4] = {};
-    sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; sizes[0].descriptorCount = 6;
+    sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; sizes[0].descriptorCount = 8;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; sizes[1].descriptorCount = 1;
     sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; sizes[2].descriptorCount = 2;
     sizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; sizes[3].descriptorCount = 1;
@@ -631,8 +641,35 @@ bool RayTracer::BuildScene(const std::vector<RtTriangle>& triangles,
     }
     VkDescriptorBufferInfo etri_info = { etri_buf_, 0, VK_WHOLE_SIZE };
     VkDescriptorBufferInfo enode_info = { enode_buf_, 0, VK_WHOLE_SIZE };
+    // Viewmodel (gun): an empty (1-element) buffer so descriptors stay valid
+    // even before UpdateGun is called.
+    if (!gtri_buf_) {
+        VkBufferCreateInfo gb = {};
+        gb.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        gb.size = sizeof(RtTriangle); gb.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT; gb.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateBuffer(dev_, &gb, nullptr, &gtri_buf_);
+        VkMemoryRequirements gr; vkGetBufferMemoryRequirements(dev_, gtri_buf_, &gr);
+        VkMemoryAllocateInfo gai = {}; gai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; gai.allocationSize = gr.size;
+        VkPhysicalDeviceMemoryProperties gp; vkGetPhysicalDeviceMemoryProperties(pd_, &gp);
+        for (uint32_t i = 0; i < gp.memoryTypeCount; i++)
+            if ((gr.memoryTypeBits & (1u<<i)) && (gp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (gp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { gai.memoryTypeIndex=i; break; }
+        vkAllocateMemory(dev_, &gai, nullptr, &gtri_mem_);
+        vkBindBufferMemory(dev_, gtri_buf_, gtri_mem_, 0);
+        gb.size = sizeof(BvhNode);
+        vkCreateBuffer(dev_, &gb, nullptr, &gnode_buf_);
+        VkMemoryRequirements gnr; vkGetBufferMemoryRequirements(dev_, gnode_buf_, &gnr);
+        VkMemoryAllocateInfo gnai = {}; gnai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO; gnai.allocationSize = gnr.size;
+        for (uint32_t i = 0; i < gp.memoryTypeCount; i++)
+            if ((gnr.memoryTypeBits & (1u<<i)) && (gp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (gp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { gnai.memoryTypeIndex=i; break; }
+        vkAllocateMemory(dev_, &gnai, nullptr, &gnode_mem_);
+        vkBindBufferMemory(dev_, gnode_buf_, gnode_mem_, 0);
+        gtri_count_ = gnode_count_ = 0;
+        gtri_cap_ = sizeof(RtTriangle); gnode_cap_ = sizeof(BvhNode);
+    }
+    VkDescriptorBufferInfo gtri_info = { gtri_buf_, 0, VK_WHOLE_SIZE };
+    VkDescriptorBufferInfo gnode_info = { gnode_buf_, 0, VK_WHOLE_SIZE };
 
-    VkWriteDescriptorSet writes[8] = {};
+    VkWriteDescriptorSet writes[10] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = compute_set_; writes[0].dstBinding = 0; writes[0].descriptorCount = 1;
     writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[0].pBufferInfo = &tri_info;
@@ -657,7 +694,13 @@ bool RayTracer::BuildScene(const std::vector<RtTriangle>& triangles,
     writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[7].dstSet = compute_set_; writes[7].dstBinding = 8; writes[7].descriptorCount = 1;
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[7].pBufferInfo = &enode_info;
-    vkUpdateDescriptorSets(dev_, 8, writes, 0, nullptr);
+    writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[8].dstSet = compute_set_; writes[8].dstBinding = 9; writes[8].descriptorCount = 1;
+    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[8].pBufferInfo = &gtri_info;
+    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[9].dstSet = compute_set_; writes[9].dstBinding = 10; writes[9].descriptorCount = 1;
+    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; writes[9].pBufferInfo = &gnode_info;
+    vkUpdateDescriptorSets(dev_, 10, writes, 0, nullptr);
     // Binding 5 (lights) is owned by SetLights; if lights were already installed
     // we must re-point it at the (possibly recreated) buffer.
     if (light_buf_) {
@@ -789,18 +832,20 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
     ubo.camPos[0] = -(view[0]*tx + view[1]*ty + view[2]*tz);
     ubo.camPos[1] = -(view[4]*tx + view[5]*ty + view[6]*tz);
     ubo.camPos[2] = -(view[8]*tx + view[9]*ty + view[10]*tz);
+    ubo.camPos[3] = pain_; // pain flash (replaces the std140 vec3 padding)
 
     float lx=0.5f, ly=0.5f, lz=1.0f, ll=std::sqrt(lx*lx+ly*ly+lz*lz);
     ubo.lightDir[0] = lx/ll; ubo.lightDir[1] = ly/ll; ubo.lightDir[2] = lz/ll;
     ubo.lightColor[0] = 1.0f; ubo.lightColor[1] = 1.0f; ubo.lightColor[2] = 1.0f;
     // Low ambient + a strong directional key light (which casts shadows) so
     // surfaces facing the light are clearly brighter than those in shadow.
-    ubo.ambient[0] = 0.0f; ubo.ambient[1] = 0.0f; ubo.ambient[2] = 0.0f;
+    ubo.ambient[0] = 0.05f; ubo.ambient[1] = 0.05f; ubo.ambient[2] = 0.05f;
     ubo.atlasSize[0] = (float)atlas_w_; ubo.atlasSize[1] = (float)atlas_h_;
     ubo.triCount = tri_count_;
     ubo.numLights = light_count_;
     ubo.etriCount = etri_count_;
     ubo.numShadowLights = std::min(light_count_, (std::uint32_t)8);
+    ubo.gunTriCount = gtri_count_;
 
     void* p; if (vkMapMemory(dev_, cam_mem_, 0, sizeof(CamUBO), 0, &p) == VK_SUCCESS) {
         std::memcpy(p, &ubo, sizeof(CamUBO));
@@ -918,6 +963,8 @@ void RayTracer::Dispatch(VkCommandBuffer cmd, const float* projection, const flo
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit_layout_, 0, 1, &blit_set_, 0, nullptr);
+    float pc[3] = { health_, (float)blitWidth, (float)blitHeight };
+    vkCmdPushConstants(cmd, blit_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
@@ -990,6 +1037,62 @@ void RayTracer::UpdateEntities(std::vector<RtTriangle> tris, const std::vector<B
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[0].pBufferInfo = &ei;
     w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[1].dstSet = compute_set_; w[1].dstBinding = 8; w[1].descriptorCount = 1;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &ni;
+    vkUpdateDescriptorSets(dev_, 2, w, 0, nullptr);
+}
+
+void RayTracer::UpdateGun(std::vector<RtTriangle> tris, const std::vector<BvhNode>& nodes) {
+    if (!initialized_ || !compute_set_) return;
+    uint32_t N = (std::uint32_t)tris.size();
+    gtri_count_ = N;
+    gnode_count_ = (std::uint32_t)nodes.size();
+    if (N == 0) { gnode_count_ = 0; return; }
+
+    VkDeviceSize trisBytes = (VkDeviceSize)N * sizeof(RtTriangle);
+    VkDeviceSize nodeBytes = (VkDeviceSize)nodes.size() * sizeof(BvhNode);
+    auto growBuf = [&](VkBuffer& buf, VkDeviceMemory& mem, VkDeviceSize& cap,
+                       VkDeviceSize bytes) {
+        if (buf && cap >= bytes) return;
+        if (buf) { vkDestroyBuffer(dev_, buf, nullptr); vkFreeMemory(dev_, mem, nullptr); }
+        buf = VK_NULL_HANDLE; mem = VK_NULL_HANDLE;
+        VkBufferCreateInfo bc = {};
+        bc.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bc.size = bytes; bc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bc.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateBuffer(dev_, &bc, nullptr, &buf);
+        VkMemoryRequirements r; vkGetBufferMemoryRequirements(dev_, buf, &r);
+        VkMemoryAllocateInfo ai = {}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = r.size;
+        VkPhysicalDeviceMemoryProperties p; vkGetPhysicalDeviceMemoryProperties(pd_, &p);
+        for (uint32_t i = 0; i < p.memoryTypeCount; i++)
+            if ((r.memoryTypeBits & (1u<<i)) && (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+                (p.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { ai.memoryTypeIndex=i; break; }
+        vkAllocateMemory(dev_, &ai, nullptr, &mem);
+        vkBindBufferMemory(dev_, buf, mem, 0);
+        cap = bytes;
+    };
+    growBuf(gtri_buf_, gtri_mem_, gtri_cap_, trisBytes);
+    growBuf(gnode_buf_, gnode_mem_, gnode_cap_, nodeBytes);
+
+    void* tp;
+    if (vkMapMemory(dev_, gtri_mem_, 0, trisBytes, 0, &tp) == VK_SUCCESS) {
+        std::memcpy(tp, tris.data(), trisBytes);
+        vkUnmapMemory(dev_, gtri_mem_);
+    }
+    void* np;
+    if (vkMapMemory(dev_, gnode_mem_, 0, nodeBytes, 0, &np) == VK_SUCCESS) {
+        std::memcpy(np, nodes.data(), nodeBytes);
+        vkUnmapMemory(dev_, gnode_mem_);
+    }
+
+    VkDescriptorBufferInfo ei = { gtri_buf_, 0, VK_WHOLE_SIZE };
+    VkDescriptorBufferInfo ni = { gnode_buf_, 0, VK_WHOLE_SIZE };
+    VkWriteDescriptorSet w[2] = {};
+    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].dstSet = compute_set_; w[0].dstBinding = 9; w[0].descriptorCount = 1;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[0].pBufferInfo = &ei;
+    w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[1].dstSet = compute_set_; w[1].dstBinding = 10; w[1].descriptorCount = 1;
     w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &ni;
     vkUpdateDescriptorSets(dev_, 2, w, 0, nullptr);
 }
