@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
 
     SDL_Window* window = SDL_CreateWindow(
         "zquake", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+        1920, 1080, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_FULLSCREEN_DESKTOP);
     if (!window) {
         zq::log::Error("Failed to create window");
         SDL_Quit();
