@@ -208,6 +208,7 @@ if(ZQ_ENABLE_TESTS)
         tests/core/bsp_test.cpp
         tests/core/move_test.cpp
         tests/core/gameplay_test.cpp
+        tests/core/combat_probe_test.cpp
         tests/core/ray_scene_test.cpp
         tests/filesystem/fs_test.cpp
     )
@@ -261,6 +262,15 @@ if(ZQ_ENABLE_TESTS)
         src/app/world_builder.cpp
     )
     target_link_libraries(zquake_raytrace PRIVATE
+        zq_render zq_engine zq_filesystem zq_vulkan SDL2::SDL2 zq_core)
+
+    # Headless frame probe: renders the app's exact "shot just fired" RT frame
+    # to /tmp/rt_muzzle.ppm for visual inspection (manual, like vulkan_smoke).
+    add_executable(zquake_frame_probe
+        tests/rt_frame_probe.cpp
+        src/app/world_builder.cpp
+    )
+    target_link_libraries(zquake_frame_probe PRIVATE
         zq_render zq_engine zq_filesystem zq_vulkan SDL2::SDL2 zq_core)
 endif()
 
