@@ -78,7 +78,15 @@ bool SetupGame(ProgVM& vm, BSPMap& map) {
     vm.SetGlobalFloatG("parm5", 0.0f); vm.SetGlobalFloatG("parm6", 0.0f);
     vm.SetGlobalFloatG("parm7", 0.0f); vm.SetGlobalFloatG("parm8", 1.0f);
     int pc = vm.FunctionIndex("PutClientInServer");
-    if (pc > 0) vm.ExecuteProgram(pc);
+    if (pc > 0) {
+        // QW-style PutClientInServer leaves self.origin where the engine
+        // parked it (it only does origin += '0 0 0.5'), so seed the e1m1
+        // info_player_start position before the spawn runs.
+        int f_origin = vm.FindField("origin");
+        float start_org[3] = {480, -352, 88};
+        if (f_origin >= 0) vm.SetEdictFieldVector(1, f_origin, start_org);
+        vm.ExecuteProgram(pc);
+    }
     int ff = vm.FindField("flags");
     if (ff >= 0) vm.EdictFieldFloat(1, ff) = (float)((int)vm.EdictFieldFloat(1, ff) | 8); // FL_CLIENT
     int fh = vm.FindField("health");
@@ -333,9 +341,148 @@ TEST_CASE("Gameplay: door-use scan finds a func_door when facing it", "[gameplay
     REQUIRE(best == best_door);
 }
 
-// A waking monster must close the distance to the player WITHOUT ever
-// walking through the client's box (regression: stale per-frame solid
-// snapshots let monsters pile into the player / each other).
+// Trigger volumes are modelled as brushes textured entirely with the
+// "trigger" texture (invisible). The renderer bakes every BSP submodel into
+// the world, so those boxes used to show; they must read as auxiliary and be
+// skipped. Real geometry owned by trigger_* entities (a trigger_counter's
+// button brush) must NOT read as auxiliary. Regression: a classname-based
+// filter hid that functional button, and a textureless filter left the
+// trigger boxes on screen.
+TEST_CASE("Gameplay: trigger-volume submodels are auxiliary-textured, real triggers stay visible", "[gameplay]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    // e1m1's trigger volumes: many submodels textured purely with "trigger"
+    int aux = 0;
+    for (int mi = 1; mi < (int)map.Models().size(); mi++)
+        if (map.ModelUsesOnlyAuxTextures(mi)) aux++;
+    REQUIRE(aux > 10);
+
+    int fc = vm.FindField("classname"), fmi = vm.FindField("modelindex");
+    REQUIRE(fc >= 0);
+
+    // Every trigger entity with a live modelindex owns real visible geometry
+    // (the trigger volumes themselves expose modelindex 0 after spawn, so the
+    // only brush they point at is the one that must render: e.g. the
+    // trigger_counter's button submodel 28).
+    for (int i = 2; i < 1024; i++) {
+        if (vm.EdictFree(i)) continue;
+        const char* cn = vm.EdictFieldString(i, fc);
+        if (!cn || std::strncmp(cn, "trigger", 7)) continue;
+        int mi = fmi >= 0 ? (int)vm.EdictFieldFloat(i, fmi) : 0;
+        if (mi < 1 || mi >= (int)map.Models().size()) continue;
+        INFO("classname " << cn << " model " << mi);
+        REQUIRE(!map.ModelUsesOnlyAuxTextures(mi));
+    }
+
+    // doors/plats are real geometry and must never read as auxiliary
+    for (int i = 2; i < 1024; i++) {
+        if (vm.EdictFree(i)) continue;
+        const char* cn = vm.EdictFieldString(i, fc);
+        if (!cn || (std::strcmp(cn, "func_plat") && std::strcmp(cn, "func_door") &&
+                    std::strcmp(cn, "door"))) continue;
+        int mi = fmi >= 0 ? (int)vm.EdictFieldFloat(i, fmi) : 0;
+        if (mi < 1 || mi >= (int)map.Models().size()) continue;
+        INFO("classname " << cn << " model " << mi);
+        REQUIRE(!map.ModelUsesOnlyAuxTextures(mi));
+    }
+}
+
+// Replicates the app's E-key handler (SV_UseEdicts): trace 128 units ahead,
+// E-key +use on a func_button -> SUB_UseTargets must reach the button's
+// target. e1m1's flagged "three buttons -> trigger_counter -> door" chain
+// (the platform/road barrier) is the full regression. Regression: the button
+// chain died at some point and the platform door never opened.
+TEST_CASE("Gameplay: pressing a func_button with +use moves its targeted door", "[gameplay]") {
+    ProgVM vm; BSPMap map;
+    if (!SetupGame(vm, map)) return;
+
+    int fc = vm.FindField("classname"), fu = vm.FindField("use");
+    int ft = vm.FindField("target"), ftn = vm.FindField("targetname");
+    int fo = vm.FindField("origin"), fcnt = vm.FindField("count");
+    REQUIRE(fc >= 0); REQUIRE(fu >= 0); REQUIRE(ft >= 0); REQUIRE(fo >= 0);
+
+    // e1m1 wiring: func_button *25/26/27 (target 't9') -> trigger_counter
+    // (targetname 't9', count 3) -> func_door (target 't10', targetname 't10').
+    std::vector<int> btns;
+    int counter = -1, door = -1;
+    const char* btn_target = "t9";
+    for (int i = 2; i < 1024; i++) {
+        if (vm.EdictFree(i)) continue;
+        const char* cn = vm.EdictFieldString(i, fc);
+        const char* tn = vm.EdictFieldString(i, ftn);
+        if (cn && std::strcmp(cn, "func_button") == 0) {
+            const char* t = vm.EdictFieldString(i, ft);
+            if (t && btn_target && std::strcmp(t, btn_target) == 0)
+                btns.push_back(i);
+        } else if (cn && std::strcmp(cn, "trigger_counter") == 0 && tn &&
+                   btn_target && std::strcmp(tn, btn_target) == 0) {
+            counter = i;
+        }
+    }
+    REQUIRE(btns.size() >= 3);
+    REQUIRE(counter > 0);
+    const char* counter_target = vm.EdictFieldString(counter, ft);
+    INFO("buttons: " << btns.size() << " counter edict " << counter
+         << " count " << fcnt << " target '" << (counter_target ? counter_target : "") << "'");
+    for (int i = 2; i < 1024; i++) {
+        if (vm.EdictFree(i)) continue;
+        const char* cn = vm.EdictFieldString(i, fc);
+        const char* tn = vm.EdictFieldString(i, ftn);
+        if ((cn && (!std::strcmp(cn, "func_door") || !std::strcmp(cn, "func_wall") ||
+                    !std::strcmp(cn, "door") || !std::strcmp(cn, "func_plat"))) &&
+            tn && counter_target && std::strcmp(tn, counter_target) == 0) { door = i; break; }
+    }
+    REQUIRE(door > 0);
+    INFO("target door edict " << door);
+    for (int b : btns) REQUIRE(vm.EdictFieldInt(b, fu) > 0);   // pressable
+
+    // park the client far away: door *3 near the start is parked with an
+    // armored sentry in its track and properly refuses to open when blocked.
+    float away[3] = { 2048.0f, 2048.0f, 2048.0f };
+    vm.SetEdictFieldVector(1, fo, away);
+
+    float door0[3]; vm.EdictFieldVector(door, fo, door0);
+
+    std::vector<SolidEntity> solids;
+    ClientPhysics cin;
+    cin.move_vars = MoveVars{};
+    auto Pump = [&](int n) {
+        for (int f = 0; f < n; f++) {
+            int ff = vm.FindField("flags");
+            if (ff >= 0) vm.EdictFieldFloat(1, ff) = (float)((int)vm.EdictFieldFloat(1, ff) | 8);
+            BuildSolidList(vm, map, solids, 1);
+            SetGameTraceContext(&map, solids.data(), (int)solids.size(), 1);
+            RunGameFrame(vm, map, 0.05f, solids.data(), (int)solids.size(), 1, &cin);
+            vm.SetSelfEdict(1); vm.SetOtherEdict(0);
+        }
+    };
+
+    // Three presses, one per button (spaced out like a real player).
+    int pressed = 0;
+    for (int b : btns) {
+        vm.SetSelfEdict(b);
+        vm.SetOtherEdict(1);
+        REQUIRE(vm.ExecuteProgram(vm.EdictFieldInt(b, fu)));
+        Pump(30);
+        pressed++;
+    }
+
+    // Door must now open (move) as the counter fires after the third press.
+    float maxd = 0.0f;
+    bool door_seen_open = false;
+    for (int f = 0; f < 200; f++) {
+        Pump(1);
+        float d[3]; vm.EdictFieldVector(door, fo, d);
+        float dist = std::sqrt((d[0]-door0[0])*(d[0]-door0[0]) + (d[1]-door0[1])*(d[1]-door0[1]) + (d[2]-door0[2])*(d[2]-door0[2]));
+        maxd = std::max(maxd, dist);
+        if (dist > 8.0f) door_seen_open = true;
+    }
+
+    INFO("pressed " << pressed << " door max move " << maxd);
+    REQUIRE(pressed == (int)btns.size());
+    REQUIRE(door_seen_open);   // the button chain must reach and move its door
+}
 TEST_CASE("Gameplay: awakened monster approaches the player without clipping into it", "[gameplay]") {
     ProgVM vm; BSPMap map;
     if (!SetupGame(vm, map)) return;

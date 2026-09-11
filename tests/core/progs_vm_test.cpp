@@ -1,6 +1,6 @@
-// Real QuakeC VM tests against the actual qwprogs.dat bundled in the GPL
-// sources. Proves the dprograms_t/dstatement_t loader + three-address
-// interpreter + map-entity spawn path work on real Id bytecode.
+// Real QuakeC VM tests against the actual progs.dat shipped in id1/pak0.pak
+// (retail/WinQuake bytecode). Proves the dprograms_t/dstatement_t loader +
+// three-address interpreter + map-entity spawn path work on real Id bytecode.
 #include <catch2/catch_test_macros.hpp>
 #include "vm/prog_vm.hpp"
 #include "vm/prog_builtins.hpp"
@@ -18,16 +18,29 @@
 using namespace zq::vm;
 
 namespace {
+// Load a data file, falling back to the game pak (id1/pak0.pak holds the
+// canonical retail progs.dat used by the gameplay tests).
 std::vector<uint8_t> ReadFile(const char* path) {
     std::vector<uint8_t> out;
     FILE* f = std::fopen(path, "rb");
-    if (!f) return out;
-    std::fseek(f, 0, SEEK_END);
-    long sz = std::ftell(f);
-    std::fseek(f, 0, SEEK_SET);
-    out.resize(sz);
-    if (sz > 0) std::fread(out.data(), 1, sz, f);
-    std::fclose(f);
+    if (f) {
+        std::fseek(f, 0, SEEK_END);
+        long sz = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        out.resize(sz > 0 ? sz : 0);
+        if (sz > 0) std::fread(out.data(), 1, sz, f);
+        std::fclose(f);
+        if (!out.empty()) return out;
+    }
+    zq::fs::PAKArchive pak;
+    if (!pak.Open("id1/pak0.pak")) return out;
+    for (auto& e : pak.GetEntries()) {
+        if (std::strcmp(e.name, "progs.dat") == 0) {
+            out.resize(e.file_size);
+            pak.ReadFile(e.name, out.data(), out.size());
+            break;
+        }
+    }
     return out;
 }
 }

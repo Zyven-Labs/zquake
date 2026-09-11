@@ -27,31 +27,17 @@ void Unimplemented(ProgVM& vm, int num) {
     vm.SetReturnInt(0);
 }
 
-// ---- PF_find (QW #21): find next entity after start matching classname/targetname ----
+// ---- PF_find (WinQuake #18): find next entity after start whose string field ----
+// whose .string field (PARM1 = byte offset) holds the match string (PARM2).
 void PF_find(ProgVM& vm) {
     int start = vm.ParmEdictNum(0);
-    const char* class_name = vm.ParmString(1);
-    const char* target_name = vm.ParmString(2);
-
-    int fclass = vm.FindField("classname");
-    int ftarget = vm.FindField("targetname");
-    int fmodel = vm.FindField("model");
+    int field_offs = vm.ParmInt(1);
+    const char* match = vm.ParmString(2);
 
     for (int e = start + 1; e < ProgVM::MAX_EDICTS; e++) {
         if (vm.EdictFree(e)) continue;
-        if (class_name && class_name[0]) {
-            if (class_name[0] == '*') {
-                const char* m = fmodel >= 0 ? vm.EdictFieldString(e, fmodel) : "";
-                if (m && strcmp(m, class_name + 1) == 0) { vm.SetReturnEdict(e); return; }
-            } else if (fclass >= 0) {
-                const char* c = vm.EdictFieldString(e, fclass);
-                if (c && strcmp(c, class_name) == 0) { vm.SetReturnEdict(e); return; }
-            }
-        }
-        if (target_name && target_name[0]) {
-            const char* t = ftarget >= 0 ? vm.EdictFieldString(e, ftarget) : "";
-            if (t && strcmp(t, target_name) == 0) { vm.SetReturnEdict(e); return; }
-        }
+        const char* s = vm.EdictFieldString(e, field_offs);
+        if (s && strcmp(s, match) == 0) { vm.SetReturnEdict(e); return; }
     }
     vm.SetReturnInt(0);
 }
@@ -202,6 +188,7 @@ void RegisterDefaultBuiltins(ProgVM& vm) {
     vm.RegisterBuiltin(13, PF_vectoyaw);
     vm.RegisterBuiltin(14, [](ProgVM& v) { v.SetReturnEdict(v.AllocEdict()); });
     vm.RegisterBuiltin(15, [](ProgVM& v) { v.FreeEdict(v.ParmEdictNum(0)); });
+    vm.RegisterBuiltin(18, PF_find);
     vm.RegisterBuiltin(19, [](ProgVM& v) { v.SetReturnString(v.ParmString(0)); }); // precache_sound
     vm.RegisterBuiltin(20, [](ProgVM& v) { v.SetReturnString(v.ParmString(0)); }); // precache_model
     vm.RegisterBuiltin(23, [](ProgVM& v) { log::Info(v.ParmString(0)); }); // bprint

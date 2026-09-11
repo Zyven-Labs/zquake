@@ -126,22 +126,17 @@ void Buf_checkclient(vm::ProgVM& vm) {
 }
 
 // find (#18): (entity start, .string field, string match) - reference PF_find.
-// The progs calls find(world, classname, "weapon_nailgun") etc.; the field
-// argument is the field-def offset and only classname lookups occur in-game.
+// WinQuake find -- PARM1 is the byte offset of a string field in each edict;
+// return the first edict after start whose field-octet holds the match string.
 void Buf_find(vm::ProgVM& vm) {
     int start = vm.ParmEdictNum(0);
-    const char* name = vm.ParmString(2);
-    int fclass = vm.FindField("classname");
+    int field_offs = vm.ParmInt(1);
+    const char* match = vm.ParmString(2);
     for (int e = start + 1; e < 1024; e++) {
         if (e == 0) continue;
         if (vm.EdictFree(e)) continue;
-        if (name && name[0]) {
-            const char* c = fclass >= 0 ? vm.EdictFieldString(e, fclass) : "";
-            if (c && strcmp(c, name) == 0) {
-                vm.SetReturnEdict(e);
-                return;
-            }
-        }
+        const char* s = vm.EdictFieldString(e, field_offs);
+        if (s && strcmp(s, match) == 0) { vm.SetReturnEdict(e); return; }
     }
     vm.SetReturnEdict(0);
 }

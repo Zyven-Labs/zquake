@@ -225,6 +225,11 @@ public:
     // Parse the entity string into structured entities.
     std::vector<BSPEntity> ParseEntities() const;
 
+    // True when a brush submodel is textured entirely with auxiliary texture
+    // names (trigger, clip). Level tools use these on volumetric brushes that
+    // only exist for triggering/collision; nobody should see their faces.
+    bool ModelUsesOnlyAuxTextures(int model_index) const;
+
 private:
     bool LoadLump(const uint8_t* data, size_t size, int lump, const void** out, size_t* out_len) const;
 

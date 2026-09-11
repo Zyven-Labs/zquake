@@ -59,6 +59,18 @@ std::vector<uint8_t> LoadSPV(const char* path) {
     }
     return data;
 }
+
+VkShaderModule CreateShaderModule(VkDevice device, const std::vector<uint8_t>& spv) {
+    VkShaderModuleCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.codeSize = spv.size();
+    info.pCode = reinterpret_cast<const uint32_t*>(spv.data());
+    VkShaderModule module;
+    if (vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    return module;
+}
 }
 
 VulkanAPI::VulkanAPI() {}
@@ -567,6 +579,8 @@ bool VulkanAPI::Initialize(SDL_Window* window) {
 
     if (!CreateDescriptorPool()) return false;
 
+    CreateOverlay();
+
     initialized_ = true;
     swapchain_valid_ = true;
     log::Info("vulkan: initialized");
@@ -611,6 +625,18 @@ void VulkanAPI::RecreateSwapchain() {
         vkDestroyRenderPass(device_, render_pass_, nullptr);
         render_pass_ = VK_NULL_HANDLE;
     }
+    if (overlay_pipeline_) {
+        vkDestroyPipeline(device_, overlay_pipeline_, nullptr);
+        overlay_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (overlay_layout_) {
+        vkDestroyPipelineLayout(device_, overlay_layout_, nullptr);
+        overlay_layout_ = VK_NULL_HANDLE;
+    }
+    if (overlay_pass_) {
+        vkDestroyRenderPass(device_, overlay_pass_, nullptr);
+        overlay_pass_ = VK_NULL_HANDLE;
+    }
     if (swapchain_) {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);
         swapchain_ = VK_NULL_HANDLE;
@@ -628,6 +654,7 @@ void VulkanAPI::RecreateSwapchain() {
         pipeline_->Create(device_, render_pass_, vs.data(), vs.size(), fs.data(), fs.size());
     }
     CreateDescriptorPool();
+    CreateOverlay();
     swapchain_valid_ = true;
 }
 
@@ -793,6 +820,278 @@ void VulkanAPI::DrawMesh(const Mesh& mesh) {
                        0, sizeof(model), model);
 
     vkCmdDrawIndexed(cmd, mesh.index_count, 1, 0, 0, 0);
+}
+
+bool VulkanAPI::CreateOverlay() {
+    auto vs = LoadSPV("shaders/spv/hud_vertex.spv");
+    auto fs = LoadSPV("shaders/spv/hud_fragment.spv");
+    if (vs.empty() || fs.empty()) {
+        log::Error("vulkan: failed to load HUD shader SPIR-V");
+        return false;
+    }
+
+    VkShaderModule vs_mod = CreateShaderModule(device_, vs);
+    VkShaderModule fs_mod = CreateShaderModule(device_, fs);
+    if (!vs_mod || !fs_mod) {
+        if (vs_mod) vkDestroyShaderModule(device_, vs_mod, nullptr);
+        if (fs_mod) vkDestroyShaderModule(device_, fs_mod, nullptr);
+        return false;
+    }
+
+    // Overlay render pass: pulls in the already-rendered frame (LOAD) and hands
+    // it to the present queue. Depth is referenced for pipeline/render-pass
+    // compatibility with the raster pass but never touched (depth disabled).
+    if (!overlay_pass_) {
+        VkAttachmentDescription color_att = {};
+        color_att.format = swapchain_format_;
+        color_att.samples = VK_SAMPLE_COUNT_1_BIT;
+        color_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        color_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color_att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color_att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color_att.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color_att.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentDescription depth_att = {};
+        depth_att.format = VK_FORMAT_D32_SFLOAT;
+        depth_att.samples = VK_SAMPLE_COUNT_1_BIT;
+        depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depth_att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth_att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depth_att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depth_att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depth_att.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference color_ref = {};
+        color_ref.attachment = 0;
+        color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference depth_ref = {};
+        depth_ref.attachment = 1;
+        depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass = {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &color_ref;
+        subpass.pDepthStencilAttachment = &depth_ref;
+
+        VkSubpassDependency dep = {};
+        dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep.dstSubpass = 0;
+        dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        // The frame was produced by a previous pass (ray blit); LOAD must see
+        // those writes, so the dependency carries color writes -> reads/writes.
+        dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkAttachmentDescription attachments[2] = { color_att, depth_att };
+        VkRenderPassCreateInfo rp_info = {};
+        rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rp_info.attachmentCount = 2;
+        rp_info.pAttachments = attachments;
+        rp_info.subpassCount = 1;
+        rp_info.pSubpasses = &subpass;
+        rp_info.dependencyCount = 1;
+        rp_info.pDependencies = &dep;
+
+        if (vkCreateRenderPass(device_, &rp_info, nullptr, &overlay_pass_) != VK_SUCCESS) {
+            log::Error("vulkan: failed to create overlay render pass");
+            vkDestroyShaderModule(device_, vs_mod, nullptr);
+            vkDestroyShaderModule(device_, fs_mod, nullptr);
+            return false;
+        }
+    }
+
+    if (!overlay_layout_) {
+        VkPushConstantRange pc = {};
+        pc.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pc.offset = 0;
+        pc.size = 8; // uW, uH
+
+        VkPipelineLayoutCreateInfo pl_info = {};
+        pl_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pl_info.pushConstantRangeCount = 1;
+        pl_info.pPushConstantRanges = &pc;
+        if (vkCreatePipelineLayout(device_, &pl_info, nullptr, &overlay_layout_) != VK_SUCCESS) {
+            log::Error("vulkan: failed to create overlay pipeline layout");
+            vkDestroyRenderPass(device_, overlay_pass_, nullptr);
+            overlay_pass_ = VK_NULL_HANDLE;
+            vkDestroyShaderModule(device_, vs_mod, nullptr);
+            vkDestroyShaderModule(device_, fs_mod, nullptr);
+            return false;
+        }
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs_mod;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fs_mod;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription binding = {};
+    binding.binding = 0;
+    binding.stride = 16; // vec2 position + vec2 uv
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[2] = {};
+    attrs[0].location = 0; attrs[0].binding = 0;
+    attrs[0].format = VK_FORMAT_R32G32_SFLOAT; attrs[0].offset = 0;
+    attrs[1].location = 1; attrs[1].binding = 0;
+    attrs[1].format = VK_FORMAT_R32G32_SFLOAT; attrs[1].offset = 8;
+
+    VkPipelineVertexInputStateCreateInfo vertex_input = {};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount = 1;
+    vertex_input.pVertexBindingDescriptions = &binding;
+    vertex_input.vertexAttributeDescriptionCount = 2;
+    vertex_input.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia = {};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp = {};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs = {};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms = {};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds = {};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState blend = {};
+    blend.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blend.blendEnable = VK_TRUE;
+    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.colorBlendOp = VK_BLEND_OP_ADD;
+    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo cb = {};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &blend;
+
+    VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamic = {};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dyn;
+
+    VkGraphicsPipelineCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertex_input;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &rs;
+    info.pMultisampleState = &ms;
+    info.pDepthStencilState = &ds;
+    info.pColorBlendState = &cb;
+    info.pDynamicState = &dynamic;
+    info.layout = overlay_layout_;
+    info.renderPass = overlay_pass_;
+    info.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr,
+                                  &overlay_pipeline_) != VK_SUCCESS) {
+        log::Error("vulkan: failed to create overlay pipeline");
+        vkDestroyPipelineLayout(device_, overlay_layout_, nullptr);
+        vkDestroyRenderPass(device_, overlay_pass_, nullptr);
+        overlay_layout_ = VK_NULL_HANDLE;
+        overlay_pass_ = VK_NULL_HANDLE;
+        vkDestroyShaderModule(device_, vs_mod, nullptr);
+        vkDestroyShaderModule(device_, fs_mod, nullptr);
+        return false;
+    }
+
+    vkDestroyShaderModule(device_, vs_mod, nullptr);
+    vkDestroyShaderModule(device_, fs_mod, nullptr);
+
+    if (!overlay_vbuf_) {
+        overlay_vbuf_ = CreateVertexBuffer(3 * 16);
+        if (!overlay_vbuf_) return false;
+        // Full-screen triangle in NDC (Vulkan NDC, y down): corners cover the
+        // whole viewport; UVs match hud_vertex layout even though unused.
+        const float kTri[3 * 4] = {
+            -1.0f, -1.0f, 0.0f, 0.0f,
+             3.0f, -1.0f, 2.0f, 0.0f,
+            -1.0f,  3.0f, 0.0f, 2.0f,
+        };
+        UpdateBuffer(overlay_vbuf_, kTri, sizeof(kTri));
+    }
+    return true;
+}
+
+void VulkanAPI::DrawCrosshair() {
+    if (!in_frame_ || !overlay_pipeline_ || !overlay_vbuf_) return;
+
+    VkCommandBuffer cmd = command_buffers_[current_frame_];
+
+    const bool separate_pass = !render_pass_active_;
+    if (separate_pass) {
+        // Ray path: the frame is already in the swapchain (rt.Dispatch blitted
+        // it); a LOAD render pass overlays the crosshair on top.
+        VkClearValue clear = {};
+        clear.depthStencil = { 1.0f, 0 };
+        VkRenderPassBeginInfo rp = {};
+        rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rp.renderPass = overlay_pass_;
+        rp.framebuffer = framebuffers_[image_index_];
+        rp.renderArea.offset = { 0, 0 };
+        rp.renderArea.extent = swapchain_extent_;
+        rp.clearValueCount = 1;
+        rp.pClearValues = &clear;
+        vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    }
+
+    VkViewport viewport = {};
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.width = (float)swapchain_extent_.width;
+    viewport.height = (float)swapchain_extent_.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = {};
+    scissor.offset = { 0, 0 };
+    scissor.extent = swapchain_extent_;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline_);
+    VkBuffer vb = overlay_vbuf_->GetBuffer();
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &offset);
+
+    float pc[2] = { (float)swapchain_extent_.width, (float)swapchain_extent_.height };
+    vkCmdPushConstants(cmd, overlay_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    if (separate_pass) vkCmdEndRenderPass(cmd);
 }
 
 bool VulkanAPI::RenderMeshToImage(uint32_t width, uint32_t height, const Mesh& mesh,
@@ -1181,6 +1480,18 @@ void VulkanAPI::Shutdown() {
     if (render_pass_) {
         vkDestroyRenderPass(device_, render_pass_, nullptr);
         render_pass_ = VK_NULL_HANDLE;
+    }
+    if (overlay_pipeline_) {
+        vkDestroyPipeline(device_, overlay_pipeline_, nullptr);
+        overlay_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (overlay_layout_) {
+        vkDestroyPipelineLayout(device_, overlay_layout_, nullptr);
+        overlay_layout_ = VK_NULL_HANDLE;
+    }
+    if (overlay_pass_) {
+        vkDestroyRenderPass(device_, overlay_pass_, nullptr);
+        overlay_pass_ = VK_NULL_HANDLE;
     }
     if (swapchain_) {
         vkDestroySwapchainKHR(device_, swapchain_, nullptr);

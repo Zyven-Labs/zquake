@@ -263,7 +263,9 @@ bool RayTracer::CreatePipelines() {
     color_att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     color_att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     color_att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_att.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    // Leave the swapchain in COLOR_ATTACHMENT_OPTIMAL so a follow-up HUD
+    // overlay pass (LOAD) can draw the crosshair on top before presentation.
+    color_att.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     VkAttachmentReference color_ref = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -842,7 +844,7 @@ void RayTracer::UpdateCameraUBO(const float* projection, const float* view) {
     ubo.lightColor[0] = 1.0f; ubo.lightColor[1] = 1.0f; ubo.lightColor[2] = 1.0f;
     // Low ambient + a strong directional key light (which casts shadows) so
     // surfaces facing the light are clearly brighter than those in shadow.
-    ubo.ambient[0] = 0.05f; ubo.ambient[1] = 0.05f; ubo.ambient[2] = 0.05f;
+    ubo.ambient[0] = 0.01f; ubo.ambient[1] = 0.01f; ubo.ambient[2] = 0.01f;
     ubo.atlasSize[0] = (float)atlas_w_; ubo.atlasSize[1] = (float)atlas_h_;
     ubo.triCount = tri_count_;
     ubo.numLights = light_count_;

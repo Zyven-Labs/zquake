@@ -47,7 +47,7 @@ set(SHADER_INC_DIR "${CMAKE_BINARY_DIR}/shaders/include")
 # Compile GLSL → SPV at build time
 set(SPV_FILES)
 if(GLSLC)
-    foreach(SHADER forward_vertex.glsl forward_fragment.glsl point_light.glsl sprite_vertex.glsl hud_vertex.glsl raytrace_compute.glsl blit_vertex.glsl blit_fragment.glsl bvh_morton_compute.glsl bvh_sort_compute.glsl bvh_build_compute.glsl bvh_aabb_compute.glsl)
+    foreach(SHADER forward_vertex.glsl forward_fragment.glsl point_light.glsl sprite_vertex.glsl hud_vertex.glsl hud_fragment.glsl raytrace_compute.glsl blit_vertex.glsl blit_fragment.glsl bvh_morton_compute.glsl bvh_sort_compute.glsl bvh_build_compute.glsl bvh_aabb_compute.glsl)
         set(BASE "${SHADER}")
         string(REPLACE ".glsl" "" BASE "${BASE}")
         set(SPV_FILE "${SHADER_SPV_DIR}/${BASE}.spv")

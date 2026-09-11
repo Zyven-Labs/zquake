@@ -910,6 +910,8 @@ int main(int argc, char** argv) {
                                      o[2] - map.Models()[mi].origin[2] };
             }
         }
+        for (int mi = 1; mi < (int)map.Models().size(); mi++)
+            if (map.ModelUsesOnlyAuxTextures(mi)) brush_hidden[mi] = true;
     };
     // Render-thread brush application: assemble drawables (non-hidden) + upload
     // door translations. Owns submodel_cache / brush_drawables (Vulkan only).
@@ -1380,6 +1382,10 @@ return eb.Triangles();
                                 map.Textures()[ti].width, map.Textures()[ti].height, nullptr);
             }
             for (int mi = 1; mi < (int)map.Models().size(); mi++) {
+                // Trigger/clip-textured brushes are invisible volumes (level
+                // tools use them for triggering/collision only); never bake
+                // them into the static scene.
+                if (map.ModelUsesOnlyAuxTextures(mi)) continue;
                 // Doors (brush submodels owned by MOVETYPE_PUSH edicts) are added
                 // to the DYNAMIC entity BVH each tick so they render at their
                 // current (open/closed) position. Exclude them from the static
@@ -1671,6 +1677,7 @@ return eb.Triangles();
                 rt.Dispatch(vulkan.GetActiveCommandBuffer(), f.proj, f.view,
                             vulkan.GetSwapchainImageView(vulkan.GetCurrentImageIndex()),
                             vulkan.GetSwapchainWidth(), vulkan.GetSwapchainHeight());
+                vulkan.DrawCrosshair();
                 vulkan.EndFrame();
                 vulkan.WaitIdle();
             } else {
@@ -1760,6 +1767,7 @@ return eb.Triangles();
                         vulkan.DrawMesh(m);
                     }
                 }
+                vulkan.DrawCrosshair();
                 vulkan.EndFrame();
             }
 

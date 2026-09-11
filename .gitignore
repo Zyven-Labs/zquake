@@ -1,0 +1,24 @@
+_deps
+
+# build artifacts
+/build/
+/CMakeFiles/
+/cmake-build-*/
+/Makefile
+/CMakeCache.txt
+*.o
+*.a
+*.spv
+
+# binaries / probes
+/zquake
+/zquake_*
+/shaders/spv/
+
+# local game data (copyrighted assets)
+/id1/
+*.pak
+*.dat
+
+# misc
+/trace_ground.txt

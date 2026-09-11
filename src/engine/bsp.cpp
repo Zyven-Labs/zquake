@@ -593,6 +593,26 @@ BSPMap::TraceResult BSPMap::ModelTrace(const float start[3], const float end[3],
     return TraceThroughHull(*this, root, clipmin, ent_origin, start, end, mins, maxs);
 }
 
+bool BSPMap::ModelUsesOnlyAuxTextures(int model_index) const {
+    if (model_index < 1 || model_index >= (int)models_.size()) return false;
+    const BSPModel& m = models_[model_index];
+    if (m.numfaces <= 0) return false;
+    int first = m.firstface;
+    if (first < 0) return false;
+    int last = first + m.numfaces;
+    if (last > (int)faces_.size()) last = (int)faces_.size();
+    for (int f = first; f < last; f++) {
+        const BSPFace& face = faces_[f];
+        if (face.texinfo < 0 || face.texinfo >= (int)texinfos_.size()) return false;
+        int miptex = texinfos_[face.texinfo].miptex;
+        if (miptex < 0 || miptex >= (int)textures_.size()) return false;
+        const char* n = textures_[miptex].name;
+        if (!(std::strncmp(n, "trigger", 7) == 0 ||
+              std::strncmp(n, "clip", 4) == 0)) return false;
+    }
+    return true;
+}
+
 bool BSPMap::BoxInSolid(const float origin[3], const float mins[3],
                         const float maxs[3]) const {
     if (clipnodes_.empty()) return false;

@@ -68,6 +68,12 @@ public:
     // Queues a mesh draw for the current frame
     void DrawMesh(const Mesh& mesh);
 
+    // Screen-space HUD overlay: draws a crosshair at the center of the screen.
+    // Safe to call once per frame after world/entity draws. Works on both the
+    // raster path (inside the active render pass) and the ray path (records a
+    // render pass of its own that pulls in the just-blitted image).
+    void DrawCrosshair();
+
     // Textures
     VulkanImage* CreateTexture(uint32_t width, uint32_t height, const void* rgba8_pixels);
     VulkanImage* CreateLightmap(const float rgba[4]);
@@ -117,6 +123,7 @@ private:
     bool CreateCommandPool();
     bool CreateDescriptorPool();
     bool CreatePipeline();
+    bool CreateOverlay();
     void RecreateSwapchain();
     void SetupDebugMessenger();
 
@@ -154,6 +161,13 @@ private:
 
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VulkanPipeline* pipeline_ = nullptr;
+
+    // Screen-space HUD overlay (crosshair): its own LOAD render pass + a small
+    // full-screen-triangle pipeline + vertex buffer for the three corners.
+    VkRenderPass overlay_pass_ = VK_NULL_HANDLE;
+    VkPipelineLayout overlay_layout_ = VK_NULL_HANDLE;
+    VkPipeline overlay_pipeline_ = VK_NULL_HANDLE;
+    VulkanBuffer* overlay_vbuf_ = nullptr;
 
     // Per-frame-in-flight UBO buffer + descriptor set. Each frame in flight
     // gets its own UBO so a frame still executing on the GPU never reads a
