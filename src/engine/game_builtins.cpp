@@ -111,6 +111,12 @@ void Buf_traceline(vm::ProgVM& vm) {
     if (forent > 0) ignore = forent;
     auto tr = g.map ? MoveBox(*g.map, zmin, zmax, v1, v2, g.ents, g.num_ents, ignore)
                     : BSPMap::TraceResult{};
+    if (getenv("ZQ_TRACE_LINES")) {
+        int selfn = vm.SelfEdict();
+        fprintf(stderr, "TL<fn=%s> traceline v1=(%.1f,%.1f,%.1f)->v2=(%.1f,%.1f,%.1f) ignore=%d hit=%d frac=%.3f\n",
+                vm.CurrentFunctionName(), v1[0], v1[1], v1[2], v2[0], v2[1], v2[2],
+                ignore, tr.hit_edict, tr.fraction);
+    }
     SetTraceResult(vm, tr);
 }
 

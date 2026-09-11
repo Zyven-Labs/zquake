@@ -41,6 +41,17 @@ public:
     }
     // String table access for diagnostics/builtins.
     const char* StringAt(int offset) const;
+    // Name of the currently executing function (for diagnostics).
+    const char* CurrentFunctionName() const {
+        if (xfunction_ >= 0 && xfunction_ < (int)functions_.size())
+            return StringAt(functions_[xfunction_].s_name);
+        return "?";
+    }
+    // Name of a function table entry (for diagnostics).
+    const char* FunctionNameFor(int func_num) const {
+        if (func_num < 0 || func_num >= (int)functions_.size()) return "?";
+        return StringAt(functions_[func_num].s_name);
+    }
     void SetString(int global_ofs, const char* s);
     // Append a string to the runtime string table and return its offset.
     int InternString(const char* s);

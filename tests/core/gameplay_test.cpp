@@ -489,6 +489,10 @@ TEST_CASE("Parity: weapon hides on pickup and reappears at the progs-scheduled t
     ProgVM vm; BSPMap map;
     if (!SetupGame(vm, map)) return;
 
+    // weapon_touch only schedules the SUB_regen respawn when deathmatch is on;
+    // without it reference Quake leaves the weapon hidden forever in SP.
+    vm.SetGlobalFloatG("deathmatch", 1.0f);
+
     int fc = vm.FindField("classname"), fo = vm.FindField("origin");
     int fn = vm.FindField("ammo_nails"), fmo = vm.FindField("model");
     int fnt = vm.FindField("nextthink"), fth = vm.FindField("think");

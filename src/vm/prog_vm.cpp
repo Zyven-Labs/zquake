@@ -751,7 +751,8 @@ bool ProgVM::ExecuteProgram(int func_num) {
         if (trace_enabled_) {
             const char* ops[] = {"DONE","MUL_F","MUL_V","MUL_FV","MUL_VF","DIV_F","DIV_V","DIV_FV","ADD_F","ADD_V","SUB_F","SUB_V","EQ_F","EQ_V","EQ_S","EQ_E","EQ_FNC","NE_F","NE_V","NE_S","NE_E","NE_FNC","LE","GE","LT","GT","LOAD_F","LOAD_ENT","LOAD_S","LOAD_FLD","LOAD_FNC","LOAD_V","STOREP_F","STOREP_ENT","STOREP_S","STOREP_FLD","STOREP_FNC","STOREP_V","STOREP_FE","STOREP_FV","STOREP_EF","STOREP_EV","STORE_F","STORE_ENT","STORE_S","STORE_FLD","STORE_FNC","STORE_V","STORE_FP","STORE_VP","BREAK","ADDRESS","BITAND","BITOR","IFNOT","IF","CALL0","CALL1","CALL2","CALL3","CALL4","CALL5","CALL6","CALL7","CALL8","STATE","GOTO","NOT"};
             const char* o = st.op < (int)(sizeof(ops)/sizeof(ops[0])) ? ops[st.op] : "?";
-            fprintf(stderr, "TRACE [%d] <fn%d> %-11s a=%d b=%d c=%d  self=%d\n", s, xfunction_, o, st.a, st.b, st.c, ProgToEdictNum(self_));
+            const char* fnn = StringAt(functions_[xfunction_].s_name);
+            fprintf(stderr, "TRACE [%d] <%s:%d> %-11s a=%d b=%d c=%d  self=%d\n", s, fnn, xfunction_, o, st.a, st.b, st.c, ProgToEdictNum(self_));
         }
 
         if (!--runaway) { RunError("runaway loop error"); return false; }
@@ -944,7 +945,8 @@ bool ProgVM::ExecuteProgram(int func_num) {
         }
 
         case OP_STATE: {
-            int ed = ProgToEdictNum(self_);
+            int ed = (global_self_ >= 0) ? ProgToEdictNum(globals_[global_self_]) : -1;
+            if (ed < 0) ed = ProgToEdictNum(self_);
             if (ed < 0) ed = 0;
             // nextthink = time + 0.1
             if (field_nextthink_ >= 0)

@@ -161,7 +161,60 @@ bool BSPMap::Load(const uint8_t* data, size_t size) {
         }
     }
 
+    // After clipnodes/models are in, neutralise broken submodel clip trees so
+    // they cannot act as phantom walls (see SanitizeSubmodelHulls()).
+    SanitizeSubmodelHulls();
+
     return !planes_.empty() || !vertexes_.empty();
+}
+
+void BSPMap::SanitizeSubmodelHulls() {
+    if (clipnodes_.empty() || models_.size() < 2) return;
+    const BSPModel& w = models_[0];
+    float gmin[3], gmax[3];
+    for (int k = 0; k < 3; k++) {
+        gmin[k] = w.mins[k] < w.maxs[k] ? w.mins[k] : w.maxs[k];
+        gmax[k] = w.mins[k] < w.maxs[k] ? w.maxs[k] : w.mins[k];
+    }
+
+    // Sparse vertical bands sampled across the whole world. A healthy submodel
+    // clip tree is solid only inside (roughly) its own model bounds, so its
+    // solid sample count scales with its bounds. A broken tree is solid over
+    // large unrelated spans (phantom walls at the player spawn), so it vastly
+    // exceeds its own expected count.
+    const float step = 64.0f;
+    const float zl[3] = {0.0f, 40.0f, 120.0f};
+
+    for (size_t i = 1; i < models_.size(); i++) {
+        BSPModel& m = models_[i];
+        for (int h = 0; h < 4; h++) {
+            int hn = m.headnode[h];
+            if (hn < 0) continue; // already empty / nothing to test
+            float mn[3], mx[3];
+            for (int k = 0; k < 3; k++) {
+                mn[k] = m.mins[k] < m.maxs[k] ? m.mins[k] : m.maxs[k];
+                mx[k] = m.mins[k] < m.maxs[k] ? m.maxs[k] : m.mins[k];
+            }
+            // expected solid samples if the tree really only covers its bounds
+            int expected = 1;
+            for (int k = 0; k < 2; k++) {
+                float span = mx[k] - mn[k];
+                expected *= 1 + (int)(span / step + 0.5f);
+            }
+            expected *= 3; // up to three z bands
+
+            int solid = 0;
+            for (float z : zl) {
+                if (z < gmin[2] - 8.0f || z > gmax[2] + 8.0f) continue;
+                for (float x = gmin[0] + step / 2; x <= gmax[0] - step / 2; x += step)
+                    for (float y = gmin[1] + step / 2; y <= gmax[1] - step / 2; y += step) {
+                        float p[3] = {x, y, z};
+                        if (PointContentsHull(p, hn) == CONTENTS_SOLID) solid++;
+                    }
+            }
+            if ((float)solid > 4.0f * expected + 16.0f) m.headnode[h] = CONTENTS_EMPTY;
+        }
+    }
 }
 
 const BSPPlane& BSPMap::FacePlane(const BSPFace& face) const {

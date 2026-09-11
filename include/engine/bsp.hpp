@@ -228,6 +228,17 @@ public:
 private:
     bool LoadLump(const uint8_t* data, size_t size, int lump, const void** out, size_t* out_len) const;
 
+    // After loading, some tools write brush submodel clip trees whose geometry
+    // is solid across huge spans that have nothing to do with the submodel's
+    // own model bounds (e1m1's doors claim solid right at the player spawn).
+    // That turns SOLID_BSP doors/plats into invisible walls that block gunshot
+    // traces and movement at arbitrary points. For each submodel hull we sample
+    // the whole world on a sparse grid; a healthy tree is solid only near its
+    // own bounds, so its sample count scales with them. A tree whose solid
+    // sample count vastly exceeds its own expected footprint is bogus and that
+    // hull is neutralised (CONTENTS_EMPTY) for collision.
+    void SanitizeSubmodelHulls();
+
     std::vector<BSPPlane> planes_;
     std::vector<BSPVertex> vertexes_;
     std::vector<BSPNode> nodes_;
